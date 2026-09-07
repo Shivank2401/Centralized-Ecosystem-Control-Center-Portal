@@ -1,0 +1,31 @@
+# Client registry — paths come from .env via data_root_env / cogs_path_env
+clients:
+  ESH:
+    name: Ecosoul Home
+    client_id: "TH-1755734939046"
+    enabled: true
+    data_root_env: ESH_DATA_ROOT
+    cogs_path_env: ESH_COGS_PATH
+    package: client_esh
+    layout: esh
+    geographies: [US, UK, DE, AE, CA, IN]
+
+  KNC:
+    name: Kinetica
+    client_id: "TH-1753144646395"
+    enabled: true
+    data_root_env: KNC_DATA_ROOT
+    cogs_path_env: KNC_COGS_PATH
+    package: client_knc
+    layout: knc
+    geographies: [UK, DE, AE]
+
+  EMM:
+    name: Emami UAE
+    client_id: "TH-1783660475608"
+    enabled: true
+    data_root_env: EMAMI_DATA_ROOT
+    cogs_path_env: EMAMI_COGS_PATH
+    package: client_emm
+    layout: emm
+    geographies: [AE]

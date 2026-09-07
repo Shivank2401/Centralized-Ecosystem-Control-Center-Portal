@@ -1,0 +1,434 @@
+"""
+Client-aware Amazon inventory database combiner (ESH + KNC).
+
+Merges already-built sanity slices per geography:
+  manage_fba + reserved + ageing (fc_transfer)
+
+Notebook source: report_script/common_sanity_report/inventory_database.ipynb
+(originally working for ESH US). Same merge / FC-transfer / reserved-qty logic,
+applied to every enabled geo for the selected client.
+
+Inputs (must already exist):
+  sanity_data/{CLIENT}/manage_fba/{GEO}_manage_fba_inventory.parquet
+  sanity_data/{CLIENT}/reserved/{GEO}_reserved_inventory.parquet
+  sanity_data/{CLIENT}/ageing/{GEO}_ageing_inventory.parquet
+
+Output:
+  sanity_data/{CLIENT}/inventory_database/{GEO}_inventory_database.parquet
+  sanity_data/{CLIENT}/inventory_database/{GEO}_inventory_database.csv
+
+Ageing date: US / CA add +1 day; all other geos add 0 days.
+FC transfer:
+  AE / IN → ageing.fc_transfer, else reserved.reserved_fc_transfers when 0
+  other   → manage_fba.afn_fc_transfer_quantity, else reserved when 0
+Reserved qty: if afn_reserved_quantity is 0, use reserved.reserved_qty.
+
+Run:
+  python report_script/common_sanity_report/inventory_database.py
+  python report_script/common_sanity_report/inventory_database.py --client ESH
+  python report_script/common_sanity_report/inventory_database.py --client KNC --geos UK,DE,AE
+  # or via run_pipeline.py → Stage: common → Inventory Database
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from config_manager import layouts, paths as cfg_paths
+from config_manager.loader import load_geographies
+from report_script.common_sanity_report.new_sku_check import (
+    check_final_dataframe_new_skus,
+)
+from report_script.common_sanity_report.run_logs import (
+    ReportRunLog,
+    format_inventory_database_geo_section,
+)
+
+CLIENT: str = "ESH"
+PROCESS_GEOS: Optional[List[str]] = None
+SAVE_OUTPUT = True
+
+PARQUET_NAME_SUFFIX = "inventory_database"
+OUTPUT_SUBDIR = "inventory_database"
+
+AGEING_DATE_PLUS_ONE_GEOS = {"US", "CA"}
+FC_TRANSFER_FROM_AGEING_GEOS = {"AE", "IN"}
+
+AGEING_KEEP_COLS = ["geography", "date", "sku", "fc_transfer"]
+RESERVED_DROP_COLS = ["client", "client_id"]
+MERGE_KEYS_MANAGE_RESERVED = ["geography", "platform", "date", "sku"]
+MERGE_KEYS_AGEING = ["geography", "date", "sku"]
+CALC_COLS = [
+    "fc_transfer",
+    "reserved_fc_transfers",
+    "afn_fc_transfer_quantity",
+    "afn_reserved_quantity",
+    "reserved_qty",
+]
+
+
+@dataclass(frozen=True)
+class InventoryDbConfig:
+    client_code: str
+    client_id: str
+    client_name: str
+    geos: List[str]
+    sku_backend: str
+    sanity_root: Path
+    output_dir: Path
+
+
+def _client_geos(client: str) -> List[str]:
+    return [str(g).upper() for g in load_geographies(client)]
+
+
+def get_inventory_db_config(
+    client: str,
+    geos: Optional[Sequence[str]] = None,
+) -> InventoryDbConfig:
+    ident = layouts.client_identity(client)
+    code = ident["client_code"]
+    allowed = _client_geos(code)
+    if geos:
+        wanted = [str(g).strip().upper() for g in geos if str(g).strip()]
+        selected = [g for g in wanted if g in allowed]
+        skipped = [g for g in wanted if g not in allowed]
+        if skipped:
+            print(f"[WARN] [{code}] geos not in client.yaml, skipped: {skipped}")
+        if not selected:
+            selected = allowed
+    else:
+        selected = allowed
+
+    sanity = cfg_paths.sanity_data_root() / code
+    return InventoryDbConfig(
+        client_code=code,
+        client_id=ident["client_id"],
+        client_name=ident["client_name"],
+        geos=selected,
+        sku_backend="knc" if code == "KNC" else "esh",
+        sanity_root=sanity,
+        output_dir=sanity / OUTPUT_SUBDIR,
+    )
+
+
+def output_dir_for(client_code: str) -> Path:
+    return cfg_paths.sanity_data_root() / str(client_code).upper() / OUTPUT_SUBDIR
+
+
+def _geo_parquet(root: Path, folder: str, geo: str, suffix: str) -> Path:
+    return root / folder / f"{geo.upper()}_{suffix}.parquet"
+
+
+def load_parquet_or_empty(
+    path: Path,
+    *,
+    client: str,
+    geo: str,
+    label: str,
+    columns: Optional[Sequence[str]] = None,
+) -> pd.DataFrame:
+    if not path.is_file():
+        print(f"[{client}] [{geo}] {label} MISSING -> {path}")
+        return pd.DataFrame()
+    df = pd.read_parquet(path, columns=list(columns) if columns else None)
+    print(f"[{client}] [{geo}] {label} loaded {len(df):,} rows <- {path.name}")
+    return df
+
+
+def _ensure_calc_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for col in CALC_COLS:
+        if col not in out.columns:
+            out[col] = 0
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    return out
+
+
+def build_geography_inventory(
+    cfg: InventoryDbConfig,
+    geo: str,
+) -> pd.DataFrame:
+    """Notebook merge + FC-transfer / reserved-qty rules for one geography."""
+    client = cfg.client_code
+
+    manage_fba = load_parquet_or_empty(
+        _geo_parquet(cfg.sanity_root, "manage_fba", geo, "manage_fba_inventory"),
+        client=client,
+        geo=geo,
+        label="manage_fba",
+    )
+    reserved = load_parquet_or_empty(
+        _geo_parquet(cfg.sanity_root, "reserved", geo, "reserved_inventory"),
+        client=client,
+        geo=geo,
+        label="reserved",
+    )
+    ageing = load_parquet_or_empty(
+        _geo_parquet(cfg.sanity_root, "ageing", geo, "ageing_inventory"),
+        client=client,
+        geo=geo,
+        label="ageing",
+    )
+
+    if manage_fba.empty:
+        print(f"[{client}] [{geo}] skip — manage_fba is required and empty")
+        return pd.DataFrame()
+
+    manage_fba = manage_fba.copy()
+    manage_fba["date"] = pd.to_datetime(manage_fba["date"], errors="coerce")
+
+    if not reserved.empty:
+        reserved = reserved.copy()
+        reserved["date"] = pd.to_datetime(reserved["date"], errors="coerce")
+        reserved = reserved.drop(
+            columns=[c for c in RESERVED_DROP_COLS if c in reserved.columns]
+        )
+
+    if not ageing.empty:
+        keep = [c for c in AGEING_KEEP_COLS if c in ageing.columns]
+        ageing = ageing.loc[:, keep].copy()
+        ageing["date"] = pd.to_datetime(ageing["date"], errors="coerce")
+        # Convert date to datetime and add 1 day if geography is US and CA else add 0 days
+        if geo.upper() in AGEING_DATE_PLUS_ONE_GEOS:
+            ageing["date"] = ageing["date"] + pd.Timedelta(days=1)
+
+    inventory_database = manage_fba
+    if not reserved.empty:
+        inventory_database = pd.merge(
+            inventory_database,
+            reserved,
+            on=[
+                c
+                for c in MERGE_KEYS_MANAGE_RESERVED
+                if c in inventory_database.columns and c in reserved.columns
+            ],
+            how="left",
+        )
+    if not ageing.empty:
+        inventory_database = pd.merge(
+            inventory_database,
+            ageing,
+            on=[
+                c
+                for c in MERGE_KEYS_AGEING
+                if c in inventory_database.columns and c in ageing.columns
+            ],
+            how="left",
+        )
+    inventory_database = _ensure_calc_columns(inventory_database)
+    inventory_database = inventory_database.fillna(0)
+
+    # geography based fc transfer quantity calculation:
+    inventory_database["new_afn_fc_transfer_quantity"] = np.where(
+        inventory_database["geography"].isin(list(FC_TRANSFER_FROM_AGEING_GEOS)),
+        # For AE and IN
+        np.where(
+            inventory_database["fc_transfer"] == 0,
+            inventory_database["reserved_fc_transfers"],
+            inventory_database["fc_transfer"],
+        ),
+        # For all other geographies
+        np.where(
+            inventory_database["afn_fc_transfer_quantity"] == 0,
+            inventory_database["reserved_fc_transfers"],
+            inventory_database["afn_fc_transfer_quantity"],
+        ),
+    )
+
+    inventory_database["afn_reserved_quantity"] = np.where(
+        inventory_database["afn_reserved_quantity"] == 0,
+        inventory_database["reserved_qty"],
+        inventory_database["afn_reserved_quantity"],
+    )
+
+    inventory_database = inventory_database.drop(
+        columns=[
+            c
+            for c in (
+                "afn_fc_transfer_quantity",
+                "reserved_fc_transfers",
+                "fc_transfer",
+                "reserved_qty",
+            )
+            if c in inventory_database.columns
+        ]
+    )
+    inventory_database = inventory_database.rename(
+        columns={"new_afn_fc_transfer_quantity": "afn_fc_transfer_quantity"}
+    )
+
+    inventory_database["client"] = client
+    inventory_database["client_id"] = cfg.client_id
+    inventory_database["geography"] = geo.upper()
+    if "platform" not in inventory_database.columns:
+        inventory_database["platform"] = "amazon"
+
+    print(
+        f"[{client}] [{geo}] inventory_database rows={len(inventory_database):,} "
+        f"cols={len(inventory_database.columns)}"
+    )
+    return inventory_database
+
+
+def save_geography_outputs(
+    df: pd.DataFrame,
+    output_dir: Path,
+    name_suffix: str = PARQUET_NAME_SUFFIX,
+) -> List[Path]:
+    if df.empty:
+        print("[WARN] Nothing to save — DataFrame is empty")
+        return []
+    if "geography" not in df.columns:
+        raise KeyError("Expected 'geography' column")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    saved: List[Path] = []
+    print(f"\nSaving per-geography inventory database outputs to: {output_dir}")
+    for geography, geo_df in df.groupby("geography", sort=True):
+        geo_name = str(geography).upper()
+        parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
+        csv_path = output_dir / f"{geo_name}_{name_suffix}.csv"
+        geo_df.to_parquet(parquet_path, index=False)
+        geo_df.to_csv(csv_path, index=False)
+        saved.extend([parquet_path, csv_path])
+        print(
+            f"  [{geo_name}] {len(geo_df):,} rows -> "
+            f"{parquet_path.name}, {csv_path.name}"
+        )
+    return saved
+
+
+def build_inventory_database(
+    *,
+    client: str = CLIENT,
+    geos: Optional[Sequence[str]] = None,
+    save_output: bool = SAVE_OUTPUT,
+) -> pd.DataFrame:
+    cfg = get_inventory_db_config(client, geos)
+
+    print("=" * 60)
+    print(f"Client : {cfg.client_code} ({cfg.client_name})")
+    print(f"ID     : {cfg.client_id}")
+    print(f"Geos   : {cfg.geos}")
+    print(f"Sanity : {cfg.sanity_root}")
+    print(f"Output : {cfg.output_dir}")
+    print(
+        "Ageing date: US/CA +1 day; others +0. "
+        "FC: AE/IN use ageing.fc_transfer; others use afn_fc_transfer_quantity; "
+        "0 -> reserved_fc_transfers"
+    )
+    print("=" * 60)
+
+    frames: List[pd.DataFrame] = []
+    run_log = ReportRunLog(cfg.client_code, "inventory_database")
+    try:
+        for geo in cfg.geos:
+            print(f"\n=== [{cfg.client_code}] {geo} ===")
+            try:
+                cleaned = build_geography_inventory(cfg, geo)
+                if not cleaned.empty:
+                    frames.append(cleaned)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[{cfg.client_code}] [{geo}] ERROR: {exc}")
+                run_log.append(f"[{cfg.client_code}] [{geo}] ERROR: {exc}")
+
+        master = (
+            pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+        )
+        print(
+            f"\n[{cfg.client_code}] combined inventory_database "
+            f"geos_ok={len(frames)}/{len(cfg.geos)} rows={len(master):,}"
+        )
+        run_log.append(
+            f"[{cfg.client_code}] combined inventory_database "
+            f"geos_ok={len(frames)}/{len(cfg.geos)} rows={len(master):,}"
+        )
+
+        alerts: dict = {}
+        if not master.empty:
+            alerts = check_final_dataframe_new_skus(
+                master,
+                client=cfg.client_code,
+                label="inventory_database",
+                run_log=run_log,
+            )
+
+        run_log.blank()
+        run_log.section("Per-geography checklist")
+        if master.empty:
+            run_log.append("(no rows)")
+        else:
+            for geography, geo_df in master.groupby("geography", sort=True):
+                code = str(geography).strip().upper()
+                block = format_inventory_database_geo_section(
+                    client=cfg.client_code,
+                    geography=code,
+                    rows=len(geo_df),
+                    stock_status=None,
+                    new_skus=alerts.get(code, []),
+                )
+                print("\n" + block)
+                run_log.append(block)
+                run_log.blank()
+
+        if save_output and not master.empty:
+            save_geography_outputs(master, cfg.output_dir)
+    finally:
+        run_log.flush()
+
+    return master
+
+
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Client-wise Amazon inventory database (manage_fba + reserved + ageing)"
+    )
+    parser.add_argument("--client", default=CLIENT, choices=["ESH", "KNC"])
+    parser.add_argument("--geos", default=None, help="Comma-separated geo codes")
+    parser.add_argument("--no-save", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> pd.DataFrame:
+    args = parse_args(argv)
+    geos = [g.strip() for g in str(args.geos).split(",") if g.strip()] if args.geos else None
+    master = build_inventory_database(
+        client=args.client,
+        geos=geos if geos else PROCESS_GEOS,
+        save_output=not args.no_save,
+    )
+    if not master.empty:
+        print(master.shape)
+        print(master.head())
+        print(master.columns.tolist())
+    return master
+
+
+def run(
+    *,
+    client: str = CLIENT,
+    geos: Optional[Sequence[str]] = None,
+    **_kwargs,
+) -> pd.DataFrame:
+    """Pipeline CLI entrypoint: run(client='ESH', geos=['US','UK'])."""
+    return main(
+        layouts.cli_argv(
+            client=client,
+            geos=list(geos) if geos else None,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

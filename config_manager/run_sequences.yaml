@@ -1,0 +1,24 @@
+# Saved pipeline run sequences for run_pipeline.py
+# Edited via interactive: Create / manage sequences
+
+sequences:
+  vector_app_updator:
+    label: Vector_App_updator
+    clients:
+    - ESH
+    - KNC
+    geos:
+    - US
+    - CA
+    - DE
+    - UK
+    - IN
+    - AE
+    reports:
+    - ageing
+    - ledger
+    - manage_fba
+    - reserved
+    - order
+    - inventory_database
+    - vector_report

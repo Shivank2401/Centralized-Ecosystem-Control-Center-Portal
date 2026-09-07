@@ -1,0 +1,17 @@
+---
+description: Keep config_manager/project_structure.md in sync with every project change
+alwaysApply: false
+---
+# Update project_structure.md
+
+Whenever you add, edit, delete, or reorganize anything in this repo that affects how the pipeline is run or configured, **also update** `config_manager/project_structure.md` in the same change set.
+
+Includes (non-exhaustive):
+- Folder / file layout
+- `client.yaml`, `geography.yaml`, `report.yaml`, `.env.example`
+- `run_pipeline.py` menus or CLI flags
+- New or moved scripts under `report_script/`
+- Output paths under `sanity_data/`
+- `config_manager` modules (`layouts`, `paths`, `loader`, helpers, SKU cleaners)
+
+That markdown file is the operator how-to (structure, flow, CLI, add/edit client·geo·report·script). Do not leave it stale.

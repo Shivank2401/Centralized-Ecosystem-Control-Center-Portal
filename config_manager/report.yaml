@@ -1,0 +1,303 @@
+# Report registry — maps CLI choices to scripts / output folders.
+# Updated by Inventory Ecosystem Portal (Phase 5 registration).
+# Interactive CLI: Clients → Geographies → Stage → Report(s within stage).
+
+report_stages:
+  common:
+    label: 'Stage: common sanity reports'
+    order: 1
+    clients:
+    - ESH
+    - KNC
+  helper_files_nd_saving:
+    label: 'Stage: helper_files_nd_saving'
+    order: 2
+    clients:
+    - ESH
+    - KNC
+  retail:
+    label: 'Stage: retail'
+    order: 3
+    clients:
+    - ESH
+  item_master:
+    label: 'Stage: item_master'
+    order: 4
+    clients:
+    - ESH
+    - KNC
+  finance:
+    label: 'Stage: finance'
+    order: 5
+    clients:
+    - ESH
+  want_to_update:
+    label: 'Stage: want_to_update'
+    order: 7
+    clients:
+    - ESH
+    - KNC
+  requirement_specific:
+    label: 'Stage: requirement_specific'
+    order: 6
+    clients:
+    - ESH
+    - KNC
+    - EMM
+  atros:
+    label: 'Stage: atros (KNC PNL / ads / decomp)'
+    order: 9
+    clients:
+    - KNC
+  utility_codes:
+    label: 'Stage: utility_codes'
+    order: 8
+reports:
+  ageing:
+    label: Ageing
+    stage: Common Sanity Reports
+    module: report_script.common_sanity_report.ageing_report
+    clients:
+    - ESH
+    - KNC
+    output_subdir: ageing
+    menu_order: 1
+    enabled: true
+  ledger:
+    label: Ledger
+    stage: Common Sanity Reports
+    module: report_script.common_sanity_report.ledger_report
+    clients:
+    - ESH
+    - KNC
+    output_subdir: ledger
+    menu_order: 2
+    enabled: true
+  manage_fba:
+    label: Manage FBA
+    stage: Common Sanity Reports
+    module: report_script.common_sanity_report.manage_fba_report
+    clients:
+    - ESH
+    - KNC
+    output_subdir: unspressed_inventory
+    menu_order: 3
+    enabled: true
+  reserved:
+    label: Reserved
+    stage: Common Sanity Reports
+    module: report_script.common_sanity_report.reserved_report
+    clients:
+    - ESH
+    - KNC
+    output_subdir: reserved
+    menu_order: 4
+    enabled: true
+  order:
+    label: Order
+    stage: Common Sanity Reports
+    module: report_script.common_sanity_report.orders_report
+    clients:
+    - ESH
+    - KNC
+    output_subdir: orders
+    menu_order: 5
+    enabled: true
+  inventory_database:
+    label: Inventory Database
+    stage: Common Sanity Reports
+    module: report_script.common_sanity_report.inventory_database
+    clients:
+    - ESH
+    - KNC
+    output_subdir: inventory_database
+    menu_order: 6
+    enabled: true
+  a_all_helper_files:
+    label: All helper files
+    stage: Supply Chain
+    module: report_script.helper_files_nd_saving.a_all_helper_files
+    clients:
+    - ESH
+    menu_order: 1
+    enabled: true
+  b_3G_nd_updike:
+    label: 3G and Updike
+    stage: Supply Chain
+    module: report_script.helper_files_nd_saving.b_3G_nd_updike
+    clients:
+    - ESH
+    menu_order: 2
+    enabled: true
+  c_saving_raw_file_on_date:
+    label: Saving raw file on date (ESH supply_chain)
+    stage: Supply Chain
+    module: report_script.helper_files_nd_saving.c_saving_raw_file_on_date
+    clients:
+    - ESH
+    menu_order: 3
+    enabled: true
+  d_download_cogs:
+    label: Download COGS (Azure → local)
+    stage: Supply Chain
+    module: report_script.helper_files_nd_saving.d_download_cogs
+    clients:
+    - ESH
+    - KNC
+    output_subdir: cogs
+    menu_order: 4
+    enabled: true
+  walmart_scintilla:
+    label: Walmart Scintilla
+    stage: Retail
+    module: report_script.retail.c_walmart_scintilla
+    clients:
+    - ESH
+    menu_order: 1
+    enabled: true
+  a_kehe:
+    label: KeHE
+    stage: Retail
+    module: report_script.retail.a_kehe
+    clients:
+    - ESH
+    menu_order: 2
+    enabled: true
+  b_sprouts:
+    label: Sprouts
+    stage: Retail
+    module: report_script.retail.b_sprouts
+    clients:
+    - ESH
+    menu_order: 3
+    enabled: true
+  item_master_manager:
+    label: Item Master Manager
+    stage: Item Master
+    module: report_script.item_master.item_master_manager
+    clients:
+    - ESH
+    - KNC
+    output_subdir: item_master
+    menu_order: 1
+    enabled: true
+  a_meir_finance:
+    label: MEIR Finance (Closing Stock)
+    stage: Finance
+    module: report_script.finance.a_meir_finance_report
+    clients:
+    - ESH
+    menu_order: 1
+    enabled: true
+  esh_cogs:
+    label: ESH COGS (Excel → Azure)
+    stage: Want to Update
+    module: report_script.want_to_update.esh_cogs
+    clients:
+    - ESH
+    output_subdir: cogs
+    menu_order: 1
+    enabled: true
+  knc_cogs:
+    label: KNC COGS (Excel → Azure)
+    stage: Want to Update
+    module: report_script.want_to_update.knc_cogs
+    clients:
+    - KNC
+    output_subdir: cogs
+    menu_order: 2
+    enabled: true
+  pincode:
+    label: Pincode
+    stage: Want to Update
+    module: report_script.want_to_update.pincode
+    clients:
+    - ESH
+    - KNC
+    output_subdir: pincode
+    menu_order: 3
+    enabled: true
+  invalid_skus:
+    label: Invalid SKUs
+    stage: Want to Update
+    module: report_script.want_to_update.invalid_skus
+    clients:
+    - ESH
+    - KNC
+    - EMM
+    output_subdir: invalid_skus
+    menu_order: 4
+    enabled: true
+  vector_report:
+    label: Vector Datahive
+    stage: Requirement Specific
+    module: report_script.requirement_specific.vector_report
+    clients:
+    - ESH
+    - KNC
+    output_subdir: vector_report
+    menu_order: 1
+    enabled: true
+  emami_report:
+    label: Emami UAE Report
+    stage: Requirement Specific
+    module: report_script.requirement_specific.emami_report
+    clients:
+    - EMM
+    output_subdir: emami_report
+    menu_order: 2
+    enabled: true
+  d_inventory_supply_chain:
+    label: Inventory Supply Chain
+    stage: Requirement Specific
+    module: report_script.requirement_specific.SC_inventory
+    clients:
+    - ESH
+    output_subdir: inventory_supply_chain
+    menu_order: 3
+    enabled: true
+  pnl_report:
+    label: PNL Report
+    stage: atros
+    module: report_script.atros_code.pnl_report
+    clients:
+    - KNC
+    output_subdir: pnl
+    menu_order: 1
+    enabled: true
+  ad_sales_report:
+    label: Ad Sales Report
+    stage: atros
+    module: report_script.atros_code.ad_sales_report
+    clients:
+    - KNC
+    output_subdir: ads
+    menu_order: 2
+    enabled: true
+  decomposition_chart:
+    label: Decomposition Chart
+    stage: atros
+    module: report_script.atros_code.decomposition_chart
+    clients:
+    - KNC
+    output_subdir: decomposition_chart
+    menu_order: 3
+    enabled: true
+  a_import_any_file_to_mysql:
+    label: Import file to MySQL
+    stage: utility_codes
+    module: report_script.utility_codes.a_import_any_file_to_mysql
+    menu_order: 1
+    enabled: true
+  b_check_duplicate_image:
+    label: Export image names
+    stage: utility_codes
+    module: report_script.utility_codes.b_check_duplicate_image
+    menu_order: 2
+    enabled: true
+  c_convert_json_to_csv:
+    label: Convert JSON to CSV
+    stage: utility_codes
+    module: report_script.utility_codes.c_convert_json_to_csv
+    menu_order: 3
+    enabled: true

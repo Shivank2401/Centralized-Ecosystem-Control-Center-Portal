@@ -1,0 +1,14 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.parquet
+.DS_Store
+Thumbs.db
+runtime/runs/
+runtime/uploads/
+runtime/temp/
+frontend/node_modules/
+frontend/dist/

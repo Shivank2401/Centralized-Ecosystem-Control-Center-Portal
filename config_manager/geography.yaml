@@ -1,0 +1,67 @@
+# Per-client geography settings (COGS sheet, currency, Amazon sales channel)
+geographies:
+  ESH:
+    US:
+      country_code: US
+      cogs_sheet_name: ESH-USA
+      country_currency: USD
+      orders_sales_channel: Amazon.com
+      enabled: true
+    UK:
+      country_code: UK
+      cogs_sheet_name: ESH-UK
+      country_currency: GBP
+      orders_sales_channel: Amazon.co.uk
+      enabled: true
+    DE:
+      country_code: DE
+      cogs_sheet_name: ESH-DE
+      country_currency: EUR
+      orders_sales_channel: Amazon.de
+      enabled: true
+    AE:
+      country_code: AE
+      cogs_sheet_name: ESH-UAE
+      country_currency: AED
+      orders_sales_channel: Amazon.ae
+      enabled: true
+    CA:
+      country_code: CA
+      cogs_sheet_name: ESH-CA
+      country_currency: CAD
+      orders_sales_channel: Amazon.ca
+      enabled: true
+    IN:
+      country_code: IN
+      cogs_sheet_name: ESH-IN
+      country_currency: INR
+      orders_sales_channel: Amazon.in
+      enabled: true
+
+  KNC:
+    UK:
+      country_code: UK
+      cogs_sheet_name: Main
+      country_currency: GBP
+      orders_sales_channel: Amazon.co.uk
+      enabled: true
+    DE:
+      country_code: DE
+      cogs_sheet_name: Germany-COGS
+      country_currency: EUR
+      orders_sales_channel: Amazon.de
+      enabled: true
+    AE:
+      country_code: AE
+      cogs_sheet_name: KCA-AE
+      country_currency: AED
+      orders_sales_channel: Amazon.ae
+      enabled: true
+
+  EMM:
+    AE:
+      country_code: AE
+      cogs_sheet_name: EMAMI-AE
+      country_currency: AED
+      orders_sales_channel: Amazon.ae
+      enabled: true

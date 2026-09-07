@@ -1,0 +1,38 @@
+# Copy this file to ".env" and fill in paths for YOUR machine.
+# Never commit .env — each user keeps their own paths.
+
+# --- Client data roots (inventory / reports source trees) ---
+# ESH: folder that contains us/, canada/, uk/, ...
+ESH_DATA_ROOT=C:\Users\Shivank Rajput\OneDrive - EcoSoul Home\Central Repository\inventory
+# KNC: Kinetica client database root (contains Inventory/, Germany/, UAE/)
+KNC_DATA_ROOT=C:\Users\Shivank Rajput\OneDrive - Incircle Ecoproducts Pvt Ltd\Thrivebrands- Cental Repository\Client Database\Kinetica
+
+# --- COGS workbooks (per client) ---
+ESH_COGS_PATH=r"C:\Users\Shivank Rajput\OneDrive - Incircle Ecoproducts Pvt Ltd\Thrivebrands- Cental Repository\Client Database\Kinetica\pnl requirement\cogs.xlsx"
+KNC_COGS_PATH=r"C:\Users\Shivank Rajput\OneDrive - Incircle Ecoproducts Pvt Ltd\Thrivebrands- Cental Repository\Client Database\Kinetica\pnl requirement\cogs.xlsx"
+
+# --- Optional overrides ---
+SANITY_DATA_ROOT=C:\Users\Shivank Rajput\OneDrive - EcoSoul Home\Central Repository\Data_nd_Developement_Pipeline\sanity_data
+PINCODE_DATA_DIR=r"C:\Developer data\Centralized Ecosystem Portal\pincode"
+# INVENTORY_BASE=  (alias for ESH inventory root used by saving_raw_file)
+# Parent of inventory (retail/, logistics/, Task file/). Default: parent of ESH_DATA_ROOT
+# ESH_CENTRAL_ROOT=
+# Full path to Country_helper.xlsx. Default: {ESH_DATA_ROOT}/dashboard_essential_files/Country_helper.xlsx
+# ESH_COUNTRY_HELPER_PATH=
+# Optional Demand_instock / helper_essential export root (outside inventory tree)
+# ESH_DEMAND_INSTOCK_ROOT=
+
+# --- Retail / Azure (Walmart Scintilla) ---
+ESH_WALMART_ROOT="C:\Users\Shivank Rajput\OneDrive - EcoSoul Home\eco soul docs\Grocery Retailers & Distributors Strategy\Retail & Food Service\Walmart"
+AZURE_STORAGE_ACCOUNT_NAME=thriveclientdatabase
+AZURE_STORAGE_ACCOUNT_KEY=t3YQjkSXWXafdSIzp48QxNgmuW8BSh+6FzHaEy6VhGbgINYgo7Sica0BZw9sAKEPbwBcjqqhK5p6+AStuxDzSA==
+CONTAINER_NAME_ESH="thrive-client-ecosoulhome"
+# Folder inside that container for Walmart parquet (was sanity_data/retail)
+WALMART_BLOB_PREFIX=sanity_data/retail
+
+# --- Item Master (Azure) ---
+# container=app-helper  folder=item_master  file={CLIENT}.parquet
+ITEM_MASTER_CONTAINER=app-helper
+ITEM_MASTER_BLOB_PREFIX=item_master
+
+

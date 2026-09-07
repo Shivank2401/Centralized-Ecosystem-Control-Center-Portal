@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --color-ink: #0f1419;
+  --color-ink-muted: #3d4a57;
+  --color-paper: #f3f1ec;
+  --color-paper-elevated: #fffcf7;
+  --color-line: #d4cfc4;
+  --color-accent: #0f766e;
+  --color-accent-soft: #ccfbf1;
+  --color-warn: #b45309;
+  --color-danger: #b91c1c;
+  --color-ok: #15803d;
+  --color-sidebar: #12181f;
+  --color-sidebar-hover: #1c2530;
+  --color-sidebar-text: #c5cdd6;
+}
+
+:root {
+  color-scheme: light;
+  --bg: var(--color-paper);
+  --bg-elevated: var(--color-paper-elevated);
+  --fg: var(--color-ink);
+  --fg-muted: var(--color-ink-muted);
+  --border: var(--color-line);
+  --accent: var(--color-accent);
+  --accent-soft: var(--color-accent-soft);
+  --surface-pattern: radial-gradient(
+      ellipse 80% 50% at 100% -20%,
+      rgba(15, 118, 110, 0.08),
+      transparent 55%
+    ),
+    linear-gradient(180deg, #f7f5f0 0%, #efece4 100%);
+}
+
+.dark {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --bg-elevated: #141b24;
+  --fg: #e8eef4;
+  --fg-muted: #8b9aab;
+  --border: #2a3544;
+  --accent: #2dd4bf;
+  --accent-soft: rgba(45, 212, 191, 0.12);
+  --surface-pattern: radial-gradient(
+      ellipse 70% 45% at 0% 0%,
+      rgba(45, 212, 191, 0.07),
+      transparent 50%
+    ),
+    linear-gradient(165deg, #0b0f14 0%, #101820 100%);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
