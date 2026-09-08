@@ -130,13 +130,13 @@ def main():
     # --- notebook cell 25 ---
     use_col_read = ["Container No. (Internal)","Container/ Tracking number (External)","Estimated Dispatched Date from Warehouse","Estimated Departure Date from Port",
                                  "Estimated Arrival Date on Port","Transit Time","WH_Arrival_Month","Origin Port","Destination Port","US WH Name","Delivered to WH Date","Reflecting in WH Inventory",
-                                 "Status","New Container No","Delivery Type", "SUPPLIER NAME", "invoice_ No_1", "Invoice Date - 1"]
+                                 "Status","New Container No","Delivery Type", "SUPPLIER NAME", "invoice_ No_1", ]
     container = pd.read_excel(CENTRAL / r"logistics/Container Data.xlsx",sheet_name="Container Tracking", usecols=use_col_read)
 
     # --- notebook cell 26 ---
     container = container.loc[:,["Container No. (Internal)","Container/ Tracking number (External)","Estimated Dispatched Date from Warehouse","Estimated Departure Date from Port",
                                  "Estimated Arrival Date on Port","Transit Time","WH_Arrival_Month","Origin Port","Destination Port","US WH Name","Delivered to WH Date","Reflecting in WH Inventory",
-                                 "Status","New Container No","Delivery Type", "SUPPLIER NAME", "invoice_ No_1", "Invoice Date - 1"]]
+                                 "Status","New Container No","Delivery Type", "SUPPLIER NAME", "invoice_ No_1", ]]
     # Drop rows where all values are blank (NaN)
     container = container.dropna(how='all')
     container
@@ -259,7 +259,7 @@ def main():
         'Type',
         'SUPPLIER NAME',
         'invoice_ No_1',
-        'Invoice Date - 1'
+        
     ]]
 
     container_sku.rename(
@@ -302,7 +302,7 @@ def main():
         columns=[
             'SUPPLIER NAME',
             'invoice_ No_1',
-            'Invoice Date - 1'
+            
         ],
         inplace=True
     )
@@ -324,7 +324,7 @@ def main():
     container_sku
 
     # --- notebook cell 35 ---
-    vendor_container = container.loc[:,["Container No. (Internal)", "SUPPLIER NAME", "invoice_ No_1", "Invoice Date - 1"]]
+    vendor_container = container.loc[:,["Container No. (Internal)", "SUPPLIER NAME", "invoice_ No_1", ]]
     vendor_container.head()
 
     # --- notebook cell 36 ---
