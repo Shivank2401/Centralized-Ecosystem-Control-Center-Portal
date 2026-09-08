@@ -1,23 +1,23 @@
 # Report registry — maps CLI choices to scripts / output folders.
-# Updated by Inventory Ecosystem Portal (Phase 5 registration).
-# Interactive CLI: Clients → Geographies → Stage → Report(s within stage).
-
 report_stages:
   common:
-    label: 'Stage: common sanity reports'
+    label: 'Stage: Common Sanity Reports'
     order: 1
+    enabled: true
     clients:
     - ESH
     - KNC
   helper_files_nd_saving:
-    label: 'Stage: helper_files_nd_saving'
+    label: 'Stage: Helper Files nd Saving'
     order: 2
+    enabled: true
     clients:
     - ESH
     - KNC
   retail:
-    label: 'Stage: retail'
+    label: 'Stage: Retail'
     order: 3
+    enabled: true
     clients:
     - ESH
   item_master:
@@ -27,19 +27,22 @@ report_stages:
     - ESH
     - KNC
   finance:
-    label: 'Stage: finance'
+    label: 'Stage: Finance'
     order: 5
+    enabled: true
     clients:
     - ESH
   want_to_update:
-    label: 'Stage: want_to_update'
+    label: 'Stage: Want to Update'
     order: 7
+    enabled: true
     clients:
     - ESH
     - KNC
   requirement_specific:
-    label: 'Stage: requirement_specific'
+    label: 'Stage: Requirement Specific'
     order: 6
+    enabled: true
     clients:
     - ESH
     - KNC
@@ -75,7 +78,7 @@ reports:
     enabled: true
   manage_fba:
     label: Manage FBA
-    stage: Common Sanity Reports
+    stage: common_sanity_reports
     module: report_script.common_sanity_report.manage_fba_report
     clients:
     - ESH
@@ -113,34 +116,34 @@ reports:
     output_subdir: inventory_database
     menu_order: 6
     enabled: true
-  a_all_helper_files:
+  all_helper_files:
     label: All helper files
     stage: Supply Chain
-    module: report_script.helper_files_nd_saving.a_all_helper_files
+    module: report_script.helper_files_nd_saving.all_helper_files
     clients:
     - ESH
     menu_order: 1
     enabled: true
-  b_3G_nd_updike:
+  threeG_nd_updike:
     label: 3G and Updike
     stage: Supply Chain
-    module: report_script.helper_files_nd_saving.b_3G_nd_updike
+    module: report_script.helper_files_nd_saving.threeG_nd_updike
     clients:
     - ESH
     menu_order: 2
     enabled: true
-  c_saving_raw_file_on_date:
+  saving_raw_file_on_date:
     label: Saving raw file on date (ESH supply_chain)
     stage: Supply Chain
-    module: report_script.helper_files_nd_saving.c_saving_raw_file_on_date
+    module: report_script.helper_files_nd_saving.saving_raw_file_on_date
     clients:
     - ESH
     menu_order: 3
     enabled: true
-  d_download_cogs:
+  download_cogs:
     label: Download COGS (Azure → local)
     stage: Supply Chain
-    module: report_script.helper_files_nd_saving.d_download_cogs
+    module: report_script.helper_files_nd_saving.download_cogs
     clients:
     - ESH
     - KNC

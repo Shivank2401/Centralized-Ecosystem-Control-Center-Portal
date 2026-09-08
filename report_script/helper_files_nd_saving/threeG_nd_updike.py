@@ -1293,7 +1293,10 @@ def run(*, client: str = "ESH", geos=None, **_kwargs):
     return main()
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('threeG_nd_updike')
 
 # conversion stats: custom_split removals=5, sku_mapping swaps=5

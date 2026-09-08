@@ -34,6 +34,7 @@ from config_manager.esh_sku_cleaning import (
     mapping_from_convertor_helper,
 )
 from config_manager.report_helpers import coalesce_snake_columns
+from config_manager.report_helpers import print_script_completed
 
 ESH_ITEM_MASTER_SHEET = "ESH-Item_master"
 HELPER_COLS = ["sku", "on_1", "on_2", "on_3", "on_4", "on_5"]
@@ -474,3 +475,4 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
 if __name__ == "__main__":
     main()
+    print_script_completed('SC_inventory')

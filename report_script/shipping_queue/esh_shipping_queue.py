@@ -731,5 +731,8 @@ def main() -> None:
             print(f"Finished: {path}")
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('esh_shipping_queue')

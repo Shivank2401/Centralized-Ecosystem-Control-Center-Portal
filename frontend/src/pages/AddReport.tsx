@@ -349,8 +349,8 @@ export function AddReportPage() {
                     <Link to="/developer/registry">
                       <Button variant="secondary">Report Registry</Button>
                     </Link>
-                    <Link to="/reports">
-                      <Button variant="ghost">All Reports</Button>
+                    <Link to="/config/reports">
+                      <Button variant="ghost">Browse packages</Button>
                     </Link>
                   </div>
                 </div>

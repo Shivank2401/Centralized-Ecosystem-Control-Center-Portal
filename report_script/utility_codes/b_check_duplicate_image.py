@@ -104,5 +104,8 @@ def main(argv: Optional[Sequence[str]] = None) -> Path:
     return export_image_names(folder, output)
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('b_check_duplicate_image')

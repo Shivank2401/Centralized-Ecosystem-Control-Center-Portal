@@ -253,3 +253,10 @@ def merge_append_dedupe(
         f"  subset={usable_subset or 'all columns'}"
     )
     return combined
+
+
+def print_script_completed(script_name: str, *, detail: str = "") -> None:
+    """Standard success banner after a report script finishes without error."""
+    name = str(script_name or "script").strip() or "script"
+    suffix = f" ({detail})" if detail else ""
+    print(f"\n[SUCCESS] {name}{suffix} completed successfully.\n")

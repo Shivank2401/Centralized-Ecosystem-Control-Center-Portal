@@ -2464,5 +2464,8 @@ def main(argv: Sequence[str] | None = None) -> dict[str, pd.DataFrame]:
     )
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('emami_report')

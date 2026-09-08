@@ -55,7 +55,7 @@ export function DashboardPage() {
             Inventory Ecosystem
           </p>
           <h2 className="mt-2 max-w-xl text-3xl font-semibold tracking-tight">
-            Data engineering control center
+            Data engineering & Scripts Control Center
           </h2>
           <p className="mt-2 max-w-xl text-sm text-[var(--fg-muted)]">
             Orchestrate clients, geographies, and report stages without leaving the portal. ETL
@@ -244,7 +244,7 @@ export function DashboardPage() {
 
       <Panel>
         <PanelHeader
-          title="Saved Sequences"
+          title="Run Sequences"
           description="From run_sequences.yaml"
           action={
             <Link to="/pipeline/sequences">
@@ -258,8 +258,8 @@ export function DashboardPage() {
           <Spinner />
         ) : (sequences.data?.length ?? 0) === 0 ? (
           <EmptyState
-            title="No saved sequences"
-            description="Create one from the CLI or Sequences page."
+            title="No run sequences"
+            description="Create one from Pipeline → Run Sequences."
           />
         ) : (
           <div className="divide-y divide-[var(--border)]">

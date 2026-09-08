@@ -9,12 +9,15 @@ Processing / cleaning / ageing logic matches the notebook; only file selection
 is parameterized by **report month**.
 
 ## Select report month
-Interactive prompt, or:
+Interactive prompt (local CLI with a TTY), or:
 ```text
 python report_script/finance/a_meir_finance_report.py --month Nov --year 2025
 python report_script/finance/a_meir_finance_report.py --report-month Nov-2025
 python report_script/finance/a_meir_finance_report.py --report-month Nov-2025 --dry-run
 ```
+
+**Portal / pipeline worker (no stdin):** uses the previous calendar month automatically.
+Override with env `MEIR_REPORT_MONTH=Nov-2025` (or pass `month=` / `year=` / `report_month=` into `run()`).
 
 Pipeline: Stage **finance** → MEIR Finance (Closing Stock).
 

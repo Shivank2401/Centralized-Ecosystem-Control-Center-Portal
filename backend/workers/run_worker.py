@@ -66,6 +66,9 @@ def main() -> int:
     manager.set_pid(args.run_id, os.getpid())
     manager.mark_running(args.run_id)
 
+    # Portal workers have no stdin TTY — scripts must not block on input().
+    os.environ.setdefault("PIPELINE_NON_INTERACTIVE", "1")
+
     log_path = manager.stdout_path(args.run_id)
     sys.stdout = _FileTee(sys.__stdout__, log_path)  # type: ignore[assignment]
     sys.stderr = _FileTee(sys.__stderr__, log_path)  # type: ignore[assignment]

@@ -1,10 +1,11 @@
 import { NavLink } from 'react-router-dom'
 import {
   Activity,
-  Boxes,
   ChevronDown,
   Database,
   FileCode2,
+  FileText,
+  FolderCode,
   FolderOutput,
   GitBranch,
   History,
@@ -16,7 +17,6 @@ import {
   ShieldCheck,
   Stethoscope,
   Users,
-  Wrench,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/utils/cn'
@@ -38,26 +38,19 @@ const groups: NavGroup[] = [
       { label: 'Run Pipeline', to: '/pipeline/run', icon: Play },
       { label: 'Active Runs', to: '/pipeline/active', icon: Activity },
       { label: 'Run History', to: '/pipeline/history', icon: History },
-      { label: 'Saved Sequences', to: '/pipeline/sequences', icon: GitBranch },
+      { label: 'Run Sequences', to: '/pipeline/sequences', icon: GitBranch },
     ],
   },
   {
     label: 'Configuration',
     items: [
+      { label: 'Overview', to: '/config', icon: LayoutDashboard },
       { label: 'Clients', to: '/config/clients', icon: Users },
       { label: 'Geographies', to: '/config/geographies', icon: MapPinned },
-      { label: 'Reports', to: '/config/reports', icon: Boxes },
-      { label: 'Stages', to: '/config/stages', icon: LayoutDashboard },
-      { label: 'Environment', to: '/config/environment', icon: Settings },
-    ],
-  },
-  {
-    label: 'Reports',
-    items: [
-      { label: 'All Reports', to: '/reports', icon: Boxes },
-      { label: 'Standard', to: '/reports/standard', icon: Boxes },
-      { label: 'Requirement Specific', to: '/reports/requirement', icon: Boxes },
-      { label: 'Utilities', to: '/reports/utilities', icon: Wrench },
+      { label: 'Reports', to: '/config/reports', icon: FolderCode },
+      { label: 'Paths & Environment', to: '/config/environment', icon: Settings },
+      { label: 'Configuration Files', to: '/config/files', icon: FileText },
+      { label: 'Configuration History', to: '/config/history', icon: History },
     ],
   },
   {
@@ -104,7 +97,12 @@ function NavGroupBlock({ group }: { group: NavGroup }) {
       {open ? (
         <div className="space-y-0.5">
           {group.items.map((item) => (
-            <NavLink key={item.to} to={item.to} className={linkClass}>
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/config' || item.to === '/config/reports'}
+              className={linkClass}
+            >
               <item.icon className="h-4 w-4 shrink-0 opacity-80" />
               <span className="truncate">{item.label}</span>
             </NavLink>
@@ -119,11 +117,9 @@ export function Sidebar() {
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-slate-800 bg-[var(--color-sidebar)] text-slate-200">
       <div className="border-b border-slate-800 px-4 py-4">
-        <p className="font-mono text-[10px] tracking-[0.2em] text-teal-400/80 uppercase">
-        Centralized
-        </p>
+        <p className="font-mono text-[10px] tracking-[0.2em] text-teal-400/80 uppercase">Centralized</p>
         <h1 className="mt-1 text-lg leading-tight font-semibold text-white">
-           Control Center
+          Control Center
           <span className="block text-teal-300">Ecosystem</span>
         </h1>
       </div>
@@ -143,7 +139,7 @@ export function Sidebar() {
         </NavLink>
       </nav>
       <div className="border-t border-slate-800 px-4 py-3 font-mono text-[10px] text-slate-500">
-        Phase 6 · Data explorers
+        Config Center · Local-first
       </div>
     </aside>
   )

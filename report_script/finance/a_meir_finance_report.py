@@ -38,6 +38,8 @@ from typing import Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+
+from pipeline_engine.interactive import env_or_none, safe_input, stdin_is_interactive
 from dateutil.relativedelta import relativedelta
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -259,16 +261,35 @@ def prompt_report_month(
     default_month: Optional[str] = None,
     default_year: Optional[int] = None,
 ) -> MeirPeriod:
-    """Interactive month/year picker (defaults to previous calendar month)."""
+    """Month/year picker — interactive on CLI TTY; previous month when non-interactive."""
     prev = datetime.now() - relativedelta(months=1)
     dm = default_month or prev.strftime("%b")
     dy = default_year or prev.year
 
+    env_rm = env_or_none("MEIR_REPORT_MONTH")
+    if env_rm:
+        print(f"MEIR Closing Stock — MEIR_REPORT_MONTH={env_rm}")
+        raw = env_rm.replace("/", "-")
+        if "-" in raw:
+            parts = raw.split("-")
+            if parts[0].isdigit() and len(parts[0]) == 4:
+                year, month = int(parts[0]), parts[1]
+            else:
+                month, year = parts[0], int(parts[1])
+            return build_period(parse_report_month(month, int(year)))
+        return build_period(parse_report_month(raw, int(dy)))
+
+    if not stdin_is_interactive():
+        print(
+            f"MEIR Closing Stock — non-interactive: using previous month {dm}-{dy} "
+            "(set MEIR_REPORT_MONTH=Nov-2025 or pass month=/year= to override)"
+        )
+        return build_period(parse_report_month(dm, int(dy)))
+
     print("\nMEIR Closing Stock — select report month")
-    raw_m = input(f"Month [{dm}]: ").strip() or dm
-    raw_y = input(f"Year  [{dy}]: ").strip() or str(dy)
-    period = build_period(parse_report_month(raw_m, int(raw_y)))
-    return period
+    raw_m = safe_input(f"Month [{dm}]: ", default=dm)
+    raw_y = safe_input(f"Year  [{dy}]: ", default=str(dy))
+    return build_period(parse_report_month(raw_m, int(raw_y)))
 
 
 # ---------------------------------------------------------------------------
@@ -714,7 +735,6 @@ def resolve_period_from_args(args: argparse.Namespace) -> MeirPeriod:
     if args.month and args.year:
         return build_period(parse_report_month(args.month, args.year))
 
-    # Interactive
     return prompt_report_month(
         default_month=args.month,
         default_year=args.year,
@@ -753,13 +773,16 @@ def run(
     if dry_run:
         argv.append("--dry-run")
 
-    # If launched from pipeline with no month, prompt interactively
+    # If launched from pipeline with no month, prompt (CLI) or default (portal)
     if not report_month and not month:
-        period = prompt_report_month()
+        period = prompt_report_month(default_year=year)
         return run_meir(period, dry_run_paths=dry_run)
 
     return main(argv)
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('a_meir_finance_report')

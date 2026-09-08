@@ -365,5 +365,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         sys.exit(1)
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('a_import_any_file_to_mysql')

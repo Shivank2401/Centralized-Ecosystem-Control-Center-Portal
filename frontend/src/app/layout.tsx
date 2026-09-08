@@ -10,16 +10,25 @@ const titles: Record<string, { title: string; subtitle?: string }> = {
   },
   '/pipeline/active': { title: 'Active Runs', subtitle: 'Live pipeline execution' },
   '/pipeline/history': { title: 'Run History', subtitle: 'Past pipeline executions' },
-  '/pipeline/sequences': { title: 'Saved Sequences', subtitle: 'Reusable run recipes' },
-  '/config/clients': { title: 'Clients', subtitle: 'Client registry' },
-  '/config/geographies': { title: 'Geographies', subtitle: 'Per-client geo settings' },
-  '/config/reports': { title: 'Reports', subtitle: 'Report configuration' },
-  '/config/stages': { title: 'Stages', subtitle: 'Pipeline stages' },
-  '/config/environment': { title: 'Environment', subtitle: 'Paths and integrations (no secrets)' },
-  '/reports': { title: 'All Reports', subtitle: 'Registered report modules' },
-  '/reports/standard': { title: 'Standard Reports', subtitle: 'Common sanity reports' },
-  '/reports/requirement': { title: 'Requirement Specific', subtitle: 'Client requirement reports' },
-  '/reports/utilities': { title: 'Utilities', subtitle: 'Utility scripts' },
+  '/pipeline/sequences': {
+    title: 'Run Sequences',
+    subtitle: 'Reusable run recipes · run_sequences.yaml',
+  },
+  '/config': { title: 'Configuration Overview', subtitle: 'Health and inventory of config_manager' },
+  '/config/clients': { title: 'Clients', subtitle: 'client.yaml management' },
+  '/config/geographies': { title: 'Geographies', subtitle: 'geography.yaml management' },
+  '/config/reports': {
+    title: 'Reports',
+    subtitle: 'Browse folders under report_script/',
+  },
+  '/config/stages': { title: 'Stages', subtitle: 'report_stages management' },
+  '/config/sequences': {
+    title: 'Run Sequences',
+    subtitle: 'Reusable run recipes · run_sequences.yaml',
+  },
+  '/config/environment': { title: 'Paths & Environment', subtitle: 'Local .env status (no secrets)' },
+  '/config/files': { title: 'Configuration Files', subtitle: 'Advanced YAML editor' },
+  '/config/history': { title: 'Configuration History', subtitle: 'Backups and diffs' },
   '/developer/add-report': { title: 'Add Report', subtitle: 'Upload and register a new report' },
   '/developer/registry': { title: 'Report Registry', subtitle: 'Manage registered reports' },
   '/developer/validation': { title: 'Validation', subtitle: 'Validate configuration and modules' },
@@ -37,7 +46,12 @@ export function AppLayout() {
     titles[pathname] ??
     (pathname.startsWith('/pipeline/runs/')
       ? { title: 'Run Detail', subtitle: 'Live progress and logs' }
-      : { title: 'Inventory Ecosystem' })
+      : pathname.match(/^\/config\/reports\/[^/]+$/)
+        ? {
+            title: decodeURIComponent(pathname.split('/').pop() || 'Package').replace(/_/g, ' '),
+            subtitle: 'Scripts in this report_script package',
+          }
+        : { title: 'Inventory Ecosystem' })
 
   return (
     <div

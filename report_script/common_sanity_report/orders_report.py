@@ -4,7 +4,7 @@ Client-aware Amazon Orders combiner (ESH + KNC).
 Shared pipeline:
   load year folders → filter sales-channel → SKU clean (esh/knc) →
   pivot → dates → city/state via orders_pincode → monthly AOV →
-  new-SKU alert vs COGS → period qty/value summary tables.
+  new-SKU alert vs COGS → 3-month qty/sales checklist (client × geo).
 
 Outputs (per client):
   sanity_data/{CLIENT}/orders/{GEO}_orders.parquet (+ .csv)
@@ -40,13 +40,13 @@ from config_manager.report_helpers import (
     IGNORE_FILE_PREFIXES,
     LoadStats,
     load_existing_parquet_outputs,
+    print_script_completed,
 )
 from report_script.common_sanity_report.new_sku_check import (
     check_final_dataframe_new_skus,
 )
 from report_script.common_sanity_report.run_logs import (
     ReportRunLog,
-    format_orders_period_summary,
 )
 
 # ---------------------------------------------------------------------------
@@ -563,72 +563,132 @@ def transform_geography_orders(
 
 
 # ---------------------------------------------------------------------------
-# Period summary
+# Period summary / checklist
 # ---------------------------------------------------------------------------
-def _period_labels(as_of: Optional[pd.Timestamp] = None) -> Tuple[str, str, str]:
-    """Return (current_month, previous_month, current_year) as YYYY-MM / YYYY."""
+def _three_month_labels(as_of: Optional[pd.Timestamp] = None) -> Tuple[str, str, str]:
+    """
+    Return (current_month, previous_month, previous_2_month) as YYYY-MM.
+
+    Uses yesterday as the reference day. On the first 2 calendar days of a
+    month, "current" is still the prior month (same early-month rule as before).
+    """
     today = as_of if as_of is not None else pd.Timestamp.today().normalize()
     ref = today - pd.Timedelta(days=1)
-    # Early-month validation: first 2 calendar days still compare prior month
     if ref.day <= 2:
         current = (ref - pd.DateOffset(months=1)).to_period("M")
     else:
         current = ref.to_period("M")
-    previous = (current - 1)
-    return str(current), str(previous), str(current.year)
+    return str(current), str(current - 1), str(current - 2)
 
 
-def print_period_summary_tables(df: pd.DataFrame) -> str:
-    if df.empty:
-        msg = "\n[INFO] Empty orders frame — no period summary"
+def _period_labels(as_of: Optional[pd.Timestamp] = None) -> Tuple[str, str, str]:
+    """Legacy helper: (current_month, previous_month, current_year)."""
+    m0, m1, _m2 = _three_month_labels(as_of)
+    return m0, m1, m0[:4]
+
+
+def _fmt_qty(value: float) -> str:
+    return f"{int(round(value)):,}"
+
+
+def _fmt_sales(value: float) -> str:
+    return f"{value:,.2f}"
+
+
+def print_orders_three_month_checklist(df: pd.DataFrame) -> str:
+    """
+    Print Orders period summary as a tabular checklist:
+
+        Client- ESH          2026-09              2026-08              2026-07
+        GEO            Qty        Sales     Qty        Sales     Qty        Sales
+        AE              26       277.80     ...
+    """
+    if df is None or df.empty:
+        msg = "\n[INFO] Empty orders frame - no Orders period summary"
         print(msg)
         return msg.strip()
 
-    current_m, previous_m, current_y = _period_labels()
+    required = {"year_month", "quantity", "total_sales"}
+    missing = required - set(df.columns)
+    if missing:
+        msg = f"\n[WARN] Missing columns for period summary: {sorted(missing)}"
+        print(msg)
+        return msg.strip()
+
+    m0, m1, m2 = _three_month_labels()
+    months = [m0, m1, m2]
     work = df.copy()
     work["quantity"] = pd.to_numeric(work["quantity"], errors="coerce").fillna(0)
     work["total_sales"] = pd.to_numeric(work["total_sales"], errors="coerce").fillna(0.0)
+    work["year_month"] = work["year_month"].astype(str)
+    if "client" not in work.columns:
+        work["client"] = "ALL"
+    if "geography" not in work.columns:
+        work["geography"] = "ALL"
 
-    rows_qty = []
-    rows_val = []
-    for geo, geo_df in work.groupby("geography", sort=True):
-        ym = geo_df["year_month"].astype(str)
-        rows_qty.append(
-            {
-                "geography": geo,
-                "current_month": geo_df.loc[ym == current_m, "quantity"].sum(),
-                "previous_month": geo_df.loc[ym == previous_m, "quantity"].sum(),
-                "current_year": geo_df.loc[ym.str.startswith(current_y), "quantity"].sum(),
-            }
-        )
-        rows_val.append(
-            {
-                "geography": geo,
-                "current_month": geo_df.loc[ym == current_m, "total_sales"].sum(),
-                "previous_month": geo_df.loc[ym == previous_m, "total_sales"].sum(),
-                "current_year": geo_df.loc[ym.str.startswith(current_y), "total_sales"].sum(),
-            }
-        )
+    geo_w, qty_w, sales_w = 12, 10, 14
+    month_block_w = qty_w + 1 + sales_w
+    sep = "-" * (geo_w + 2 + len(months) * (month_block_w + 2) - 2)
 
-    qty_df = pd.DataFrame(rows_qty)
-    val_df = pd.DataFrame(rows_val)
-    for col in ("current_month", "previous_month", "current_year"):
-        qty_df[col] = qty_df[col].round(0).astype("int64")
-        val_df[col] = val_df[col].round(2)
+    def _month_pair(qty: float, sales: float) -> str:
+        return f"{_fmt_qty(qty):>{qty_w}} {_fmt_sales(sales):>{sales_w}}"
 
-    print("\n" + "=" * 72)
-    print(f"Orders QTY by geography  (current={current_m}, previous={previous_m}, year={current_y})")
-    print("=" * 72)
-    print(qty_df.to_string(index=False))
-    print("\n" + "=" * 72)
-    print(f"Orders VALUE by geography  (current={current_m}, previous={previous_m}, year={current_y})")
-    print("=" * 72)
-    print(val_df.to_string(index=False))
-    print("=" * 72)
+    def _header_months() -> str:
+        return "  ".join(f"{label:^{month_block_w}}" for label in months)
 
-    period_lines = format_orders_period_summary(work)
-    print("\n" + period_lines)
-    return period_lines
+    def _subheader() -> str:
+        pair = f"{'Qty':>{qty_w}} {'Sales':>{sales_w}}"
+        return "  ".join(pair for _ in months)
+
+    lines: List[str] = []
+    lines.append("")
+    lines.append("=" * len(sep))
+    lines.append("Orders period summary  (current + previous 2 months)")
+    lines.append("=" * len(sep))
+
+    for client, c_df in work.groupby("client", sort=True):
+        client_label = f"Client- {client}"
+        lines.append(f"{client_label:<{geo_w}}  {_header_months()}")
+        lines.append(f"{'GEO':<{geo_w}}  {_subheader()}")
+        lines.append(sep)
+
+        for geo, geo_df in c_df.groupby("geography", sort=True):
+            ym = geo_df["year_month"]
+            cells: List[str] = []
+            for label in months:
+                slice_df = geo_df.loc[ym == label]
+                cells.append(
+                    _month_pair(
+                        float(slice_df["quantity"].sum()),
+                        float(slice_df["total_sales"].sum()),
+                    )
+                )
+            lines.append(f"{str(geo):<{geo_w}}  " + "  ".join(cells))
+
+        # Client total row
+        ym_all = c_df["year_month"]
+        total_cells: List[str] = []
+        for label in months:
+            slice_df = c_df.loc[ym_all == label]
+            total_cells.append(
+                _month_pair(
+                    float(slice_df["quantity"].sum()),
+                    float(slice_df["total_sales"].sum()),
+                )
+            )
+        lines.append(sep)
+        lines.append(f"{'ALL':<{geo_w}}  " + "  ".join(total_cells))
+        lines.append("")
+
+    lines.append("=" * len(sep))
+    text = "\n".join(lines).rstrip() + "\n"
+    print(text)
+    return text.strip()
+
+
+def print_period_summary_tables(df: pd.DataFrame) -> str:
+    """Print tabular Orders period summary (qty/sales by GEO x 3 months)."""
+    return print_orders_three_month_checklist(df)
 
 
 # ---------------------------------------------------------------------------
@@ -1004,13 +1064,6 @@ def build_orders_dataframe(
         else:
             master_df = resolve_orders_duplicates(new_df) if apply_transform else new_df
 
-        if apply_transform:
-            period_text = print_period_summary_tables(
-                master_df if not master_df.empty else new_df
-            )
-            run_log.blank()
-            run_log.append(period_text)
-
         if not master_df.empty:
             check_final_dataframe_new_skus(
                 master_df,
@@ -1018,6 +1071,12 @@ def build_orders_dataframe(
                 label="orders",
                 run_log=run_log,
             )
+
+        if apply_transform and not master_df.empty:
+            # Tabular period summary immediately before final export.
+            period_text = print_period_summary_tables(master_df)
+            run_log.blank()
+            run_log.append(period_text)
 
         if save_output:
             if not master_df.empty:
@@ -1087,3 +1146,4 @@ def run(
 
 if __name__ == "__main__":
     run_main()
+    print_script_completed('orders_report')

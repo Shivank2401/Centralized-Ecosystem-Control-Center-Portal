@@ -366,5 +366,8 @@ def main() -> None:
     )
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('decomposition_chart')

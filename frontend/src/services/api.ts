@@ -18,6 +18,7 @@ import type {
   RunSequence,
   UploadAnalysis,
   ValidationResult,
+  ReportScriptPackage,
 } from '@/types'
 
 export class ApiError extends Error {
@@ -165,4 +166,120 @@ export const api = {
     return request<unknown>(`/api/explore/cogs${q}`)
   },
   explorePincode: () => request<import('@/types').BrowseResult>('/api/explore/pincode'),
+
+  // Configuration Management Center
+  configOverview: () => request<Record<string, unknown>>('/api/config/overview'),
+  configValidate: () =>
+    request<{ ok: boolean; errors: unknown[]; warnings: unknown[]; checks: unknown[] }>(
+      '/api/config/validate',
+      { method: 'POST' },
+    ),
+  configClients: () => request<Client[]>('/api/config/clients'),
+  configSaveClient: (code: string, body: Record<string, unknown>, create = false) =>
+    request<Client>(`/api/config/clients/${encodeURIComponent(code)}`, {
+      method: create ? 'POST' : 'PUT',
+      body: JSON.stringify(body),
+    }),
+  configEnableClient: (code: string, enabled: boolean) =>
+    request<Client>(`/api/config/clients/${encodeURIComponent(code)}/enabled`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+  configGeographies: (client?: string) => {
+    const q = client ? `?client=${encodeURIComponent(client)}` : ''
+    return request<Geography[]>(`/api/config/geographies${q}`)
+  },
+  configSaveGeography: (
+    client: string,
+    geo: string,
+    body: Record<string, unknown>,
+    create = false,
+  ) =>
+    request<Geography>(
+      `/api/config/geographies/${encodeURIComponent(client)}/${encodeURIComponent(geo)}`,
+      { method: create ? 'POST' : 'PUT', body: JSON.stringify(body) },
+    ),
+  configReports: () => request<Report[]>('/api/config/reports'),
+  configSaveReport: (code: string, body: Record<string, unknown>) =>
+    request<Report>(`/api/config/reports/${encodeURIComponent(code)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  configEnableReport: (code: string, enabled: boolean) =>
+    request<Report & { sequence_refs?: string[] }>(
+      `/api/config/reports/${encodeURIComponent(code)}/enabled`,
+      { method: 'POST', body: JSON.stringify({ enabled }) },
+    ),
+  configStages: () => request<ReportStage[]>('/api/config/stages'),
+  configSaveStage: (key: string, body: Record<string, unknown>, create = false) =>
+    request<ReportStage>(`/api/config/stages/${encodeURIComponent(key)}`, {
+      method: create ? 'POST' : 'PUT',
+      body: JSON.stringify(body),
+    }),
+  configSequences: () => request<RunSequence[]>('/api/config/sequences'),
+  configSaveSequence: (id: string, body: Record<string, unknown>, create = false) =>
+    create
+      ? request<RunSequence>(`/api/config/sequences?id=${encodeURIComponent(id)}`, {
+          method: 'POST',
+          body: JSON.stringify(body),
+        })
+      : request<RunSequence>(`/api/config/sequences/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(body),
+        }),
+  configDeleteSequence: (id: string) =>
+    request<{ id: string; deleted: boolean }>(`/api/config/sequences/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  configDuplicateSequence: (id: string) =>
+    request<RunSequence>(`/api/config/sequences/${encodeURIComponent(id)}/duplicate`, {
+      method: 'POST',
+    }),
+  configValidateSequence: (body: Record<string, unknown>) =>
+    request<{ ok: boolean; errors: string[] }>('/api/config/sequences/validate', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  configEnvironment: () => request<EnvironmentSnapshot & { dotenv_found?: boolean }>(
+    '/api/config/environment',
+  ),
+  configSetEnvPath: (key: string, value: string) =>
+    request<{ key: string; set: boolean; accessible: boolean }>('/api/config/environment/path', {
+      method: 'POST',
+      body: JSON.stringify({ key, value }),
+    }),
+  configFiles: () =>
+    request<{ name: string; size_bytes: number; modified: string; valid: boolean; error?: string }[]>(
+      '/api/config/files',
+    ),
+  configFile: (name: string) =>
+    request<{ name: string; content: string; valid: boolean; modified: string }>(
+      `/api/config/files/${encodeURIComponent(name)}`,
+    ),
+  configSaveFile: (name: string, content: string) =>
+    request<Record<string, unknown>>(`/api/config/files/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
+  configHistory: (limit = 100) =>
+    request<
+      {
+        id: string
+        timestamp: string
+        user: string
+        file: string
+        action: string
+        summary: string
+        diff?: string
+        backup?: string
+      }[]
+    >(`/api/config/history?limit=${limit}`),
+  configRestoreHistory: (id: string) =>
+    request<Record<string, unknown>>(`/api/config/history/${encodeURIComponent(id)}/restore`, {
+      method: 'POST',
+    }),
+
+  reportScriptPackages: () => request<ReportScriptPackage[]>('/api/report-scripts'),
+  reportScriptPackage: (name: string) =>
+    request<ReportScriptPackage>(`/api/report-scripts/${encodeURIComponent(name)}`),
 }

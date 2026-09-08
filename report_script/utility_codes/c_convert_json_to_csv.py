@@ -148,5 +148,8 @@ def main(argv: Optional[Sequence[str]] = None) -> Path:
     )
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('c_convert_json_to_csv')

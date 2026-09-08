@@ -44,6 +44,7 @@ from config_manager.report_helpers import (
 )
 from config_manager import esh_sku_cleaning, knc_sku_cleaning, paths
 from config_manager import layouts
+from config_manager.report_helpers import print_script_completed
 from report_script.common_sanity_report.new_sku_check import (
     check_final_dataframe_new_skus,
 )
@@ -826,3 +827,4 @@ def run(
 
 if __name__ == "__main__":
     master_reserved_df, failed_files = main()
+    print_script_completed('reserved_report')

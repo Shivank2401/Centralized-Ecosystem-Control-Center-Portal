@@ -1299,7 +1299,10 @@ def run(*, client: str = "ESH", geos=None, **_kwargs):
     return main()
 
 
+from config_manager.report_helpers import print_script_completed
+
 if __name__ == "__main__":
     main()
+    print_script_completed('all_helper_files')
 
 # conversion stats: custom_split removals=4, sku_mapping swaps=5

@@ -39,6 +39,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config_manager import paths as cfg_paths
+from config_manager.report_helpers import print_script_completed
 from report_script.retail import drop_duplicates_appended
 from report_script.retail.azure_csv_sync import sync_datasets_to_azure_csv
 
@@ -585,3 +586,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     run(skip_azure=args.skip_azure)
+    print_script_completed("a_kehe")

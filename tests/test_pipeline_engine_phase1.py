@@ -22,9 +22,20 @@ def test_project_root_is_portal_folder():
     assert not (_ROOT / "client_pipeline").exists()
 
 
+def test_resolve_report_code_case_insensitive():
+    reg = ConfigRegistry()
+    assert reg.resolve_report_code("threeG_nd_updike") == "threeG_nd_updike"
+    assert reg.resolve_report_code("threeg_nd_updike") == "threeG_nd_updike"
+    assert reg.resolve_report_code("missing_report_xyz") is None
+
+
 def test_normalize_stage_key():
-    assert normalize_stage_key("Common Sanity Reports") == "common_sanity_reports"
     assert normalize_stage_key("common") == "common"
+    assert normalize_stage_key("Common Sanity Reports") == "common"
+    assert normalize_stage_key("common_sanity_reports") == "common"
+    assert normalize_stage_key("Supply Chain") == "helper_files_nd_saving"
+    assert normalize_stage_key("helper_files_nd_saving") == "helper_files_nd_saving"
+    assert normalize_stage_key("Retail") == "retail"
 
 
 def test_registry_loads_clients():

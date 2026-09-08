@@ -48,6 +48,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config_manager import cogs_local, layouts, paths as cfg_paths
 from config_manager.loader import load_geographies
 from config_manager.report_helpers import to_snake
+from config_manager.report_helpers import print_script_completed
 from report_script.common_sanity_report.new_sku_check import report_new_skus_vs_cogs
 
 CLIENT = "ESH"
@@ -1172,6 +1173,7 @@ def run(
 
 if __name__ == "__main__":
     main()
+    print_script_completed('vector_report')
 
 
 

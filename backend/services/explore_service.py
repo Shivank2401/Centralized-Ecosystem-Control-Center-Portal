@@ -199,6 +199,10 @@ class ExploreService:
                     reports.extend(nested)
                     continue
                 reports.append(self._log_report_entry(cli, child.name, child))
+            reports.sort(
+                key=lambda r: r.get("latest_modified") or "",
+                reverse=True,
+            )
             rows.append(
                 {
                     "client": cli,
@@ -212,6 +216,12 @@ class ExploreService:
     def _log_report_entry(self, client: str, report_key: str, folder: Path) -> Dict[str, Any]:
         files = self._list_files(folder, limit=100, extensions={".log", ".txt", ".csv"})
         latest = next((f for f in files if f["name"] == "latest.log"), files[0] if files else None)
+        # Prefer latest.log mtime as "last run"; fall back to newest file in folder.
+        latest_modified = None
+        if latest and latest.get("modified"):
+            latest_modified = latest["modified"]
+        elif files:
+            latest_modified = files[0].get("modified")
         return {
             "client": client,
             "report": report_key,
@@ -221,6 +231,7 @@ class ExploreService:
             "file_count": len(files),
             "files": files,
             "latest": latest,
+            "latest_modified": latest_modified,
         }
 
     def read_log_text(

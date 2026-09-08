@@ -47,6 +47,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config_manager import paths as cfg_paths
+from config_manager.report_helpers import print_script_completed
 
 
 def to_snake(name: str) -> str:
@@ -1096,3 +1097,4 @@ if __name__ == "__main__":
     else:
         upload_choice = None
     run(upload_azure=upload_choice)
+    print_script_completed("c_walmart_scintilla")

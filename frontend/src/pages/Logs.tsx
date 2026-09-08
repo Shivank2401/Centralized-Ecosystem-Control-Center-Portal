@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Copy, FileText } from 'lucide-react'
+import { FileText, X } from 'lucide-react'
 import { useClients } from '@/hooks/useApi'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -9,6 +9,24 @@ import { Panel, PanelHeader } from '@/components/ui/Panel'
 import { useToast } from '@/components/ui/Toast'
 import { api } from '@/services/api'
 import type { LogContent, LogReportEntry } from '@/types'
+
+function formatLogDateTime(iso?: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+function lastRunIso(entry: LogReportEntry): string {
+  return entry.latest_modified || entry.latest?.modified || entry.files[0]?.modified || ''
+}
 
 export function LogsPage() {
   const toast = useToast()
@@ -28,8 +46,15 @@ export function LogsPage() {
     for (const block of logs.data ?? []) {
       for (const r of block.reports) list.push(r)
     }
+    // Newest run first across clients / reports
+    list.sort((a, b) => lastRunIso(b).localeCompare(lastRunIso(a)))
     return list
   }, [logs.data])
+
+  function closeModal() {
+    setActive(null)
+    setContent(null)
+  }
 
   async function openLog(entry: LogReportEntry, filename = 'latest.log') {
     setActive(entry)
@@ -51,6 +76,20 @@ export function LogsPage() {
     }
   }
 
+  useEffect(() => {
+    if (!active) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeModal()
+    }
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = prev
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [active])
+
   if (clients.isLoading || logs.isLoading) return <Spinner label="Loading report logs…" />
   if (logs.error) {
     return (
@@ -67,7 +106,7 @@ export function LogsPage() {
       <Panel>
         <PanelHeader
           title="Report Logs"
-          description="sanity_data/{CLIENT}/logs/{report}/ — client-specific, report-wise text logs"
+          description="sanity_data/{CLIENT}/logs/{report}/ — newest runs first; each report keeps latest.log plus dated run snapshots"
         />
         <div className="flex flex-wrap gap-2 border-b border-[var(--border)] px-5 py-3">
           <Button variant={!client ? 'primary' : 'secondary'} onClick={() => setClient('')}>
@@ -91,88 +130,119 @@ export function LogsPage() {
           />
         ) : (
           <div className="divide-y divide-[var(--border)]">
-            {reports.map((r) => (
-              <div
-                key={`${r.client}-${r.report}`}
-                className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
-              >
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-sm font-semibold">{r.client}</span>
-                    <Badge tone="accent">{r.report}</Badge>
-                    <Badge tone="neutral">{r.file_count} files</Badge>
+            {reports.map((r) => {
+              const runAt = lastRunIso(r)
+              return (
+                <div
+                  key={`${r.client}-${r.report}`}
+                  className="flex items-start justify-between gap-3 px-5 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-sm font-semibold">{r.client}</span>
+                      <Badge tone="accent">{r.report}</Badge>
+                      <span
+                        title="Number of log files saved for this report (latest.log + dated YYYYMMDD_HHMMSS.log snapshots from past runs)"
+                      >
+                        <Badge tone="neutral">
+                          {r.file_count} saved log{r.file_count === 1 ? '' : 's'}
+                        </Badge>
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-[var(--fg)]">
+                      Last run:{' '}
+                      <span className="font-mono text-[var(--accent)]">{formatLogDateTime(runAt)}</span>
+                    </p>
+                    <p className="mt-0.5 break-all font-mono text-[11px] text-[var(--fg-muted)]">
+                      {r.path}
+                    </p>
                   </div>
-                  <p className="mt-1 break-all font-mono text-[11px] text-[var(--fg-muted)]">
-                    {r.path}
-                  </p>
+                  <div className="shrink-0">
+                    <Button onClick={() => void openLog(r)}>
+                      <FileText className="h-4 w-4" />
+                      View latest
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(r.path)
-                      toast.push({ kind: 'info', title: 'Path copied' })
-                    }}
-                  >
-                    <Copy className="h-4 w-4" />
-                    Copy path
-                  </Button>
-                  <Button onClick={() => void openLog(r)}>
-                    <FileText className="h-4 w-4" />
-                    View latest
-                  </Button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </Panel>
 
       {active ? (
-        <Panel>
-          <PanelHeader
-            title={`${active.client} · ${active.report}`}
-            description={content?.path || active.path}
-            action={
-              <div className="flex flex-wrap gap-2">
-                {active.files.map((f) => (
-                  <Button
-                    key={f.name}
-                    variant={content?.filename === f.name ? 'primary' : 'ghost'}
-                    onClick={() => void openLog(active, f.name)}
-                  >
-                    {f.name}
-                  </Button>
-                ))}
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setActive(null)
-                    setContent(null)
-                  }}
-                >
-                  Close
-                </Button>
-              </div>
-            }
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="log-viewer-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/60 backdrop-blur-[1px]"
+            aria-label="Close log viewer"
+            onClick={closeModal}
           />
-          {loadingContent ? (
-            <Spinner label="Reading log…" />
-          ) : content ? (
-            <div className="p-5">
-              {content.truncated ? (
-                <p className="mb-2 text-xs text-[var(--color-warn)]">
-                  Truncated preview (file {content.size_bytes} bytes)
+          <div className="relative z-10 flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl shadow-black/40">
+            <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
+              <div className="min-w-0">
+                <h2 id="log-viewer-title" className="text-base font-semibold tracking-tight">
+                  {active.client} · {active.report}
+                </h2>
+                <p className="mt-1 text-sm text-[var(--fg-muted)]">
+                  Last run: {formatLogDateTime(lastRunIso(active))}
                 </p>
-              ) : null}
-              <pre className="max-h-[32rem] overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-                {content.text || '(empty)'}
-              </pre>
+                <p className="mt-1 break-all font-mono text-[11px] text-[var(--fg-muted)]">
+                  {content?.path || active.path}
+                </p>
+              </div>
+              <Button variant="ghost" className="!px-2" onClick={closeModal} title="Close">
+                <X className="h-4 w-4" />
+              </Button>
             </div>
-          ) : (
-            <EmptyState title="No log content" />
-          )}
-        </Panel>
+
+            <div className="flex flex-wrap gap-2 border-b border-[var(--border)] px-5 py-3">
+              {active.files.map((f) => (
+                <Button
+                  key={f.name}
+                  variant={content?.filename === f.name ? 'primary' : 'ghost'}
+                  onClick={() => void openLog(active, f.name)}
+                  title={formatLogDateTime(f.modified)}
+                >
+                  <span className="flex flex-col items-start leading-tight">
+                    <span>{f.name}</span>
+                    <span className="text-[10px] opacity-80">{formatLogDateTime(f.modified)}</span>
+                  </span>
+                </Button>
+              ))}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto p-5">
+              {loadingContent ? (
+                <Spinner label="Reading log…" />
+              ) : content ? (
+                <>
+                  {content.truncated ? (
+                    <p className="mb-2 text-xs text-[var(--color-warn)]">
+                      Truncated preview (file {content.size_bytes} bytes)
+                    </p>
+                  ) : null}
+                  <pre className="max-h-[min(60vh,32rem)] overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+                    {content.text || '(empty)'}
+                  </pre>
+                </>
+              ) : (
+                <EmptyState title="No log content" />
+              )}
+            </div>
+
+            <div className="flex justify-end border-t border-[var(--border)] px-5 py-3">
+              <Button variant="secondary" onClick={closeModal}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   )

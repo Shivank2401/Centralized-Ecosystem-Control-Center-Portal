@@ -22,3 +22,20 @@ sequences:
     - order
     - inventory_database
     - vector_report
+  supply_chain_inventory_update:
+    label: SC Invetory
+    clients:
+    - ESH
+    geos:
+    - AE
+    - CA
+    - DE
+    - IN
+    - UK
+    - US
+    reports:
+    - all_helper_files
+    - threeG_nd_updike
+    - saving_raw_file_on_date
+    - d_inventory_supply_chain
+    enabled: true

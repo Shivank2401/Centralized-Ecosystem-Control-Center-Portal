@@ -41,9 +41,18 @@ STAGE_PATHS: Dict[str, str] = {
     "item_master": "report_script/item_master",
 }
 
+# Historical / label-derived keys → report_stages keys (and STAGE_PATHS).
+# Reports often store display-ish stage strings; menu keys stay short.
+STAGE_ALIASES: Dict[str, str] = {
+    "common_sanity_reports": "common",
+    "common_sanity_report": "common",
+    "supply_chain": "helper_files_nd_saving",
+}
+
 
 def normalize_stage_key(stage: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", str(stage).strip().lower()).strip("_")
+    key = re.sub(r"[^a-z0-9]+", "_", str(stage).strip().lower()).strip("_")
+    return STAGE_ALIASES.get(key, key)
 
 
 def slugify_sequence_id(name: str) -> str:
@@ -101,6 +110,28 @@ class ConfigRegistry:
     def all_reports(self) -> Dict[str, dict]:
         return dict(self._reports_raw.get("reports") or {})
 
+    def resolve_report_code(self, code: str) -> Optional[str]:
+        """Map a report id to the canonical YAML key (case-insensitive)."""
+        reports = self.all_reports()
+        raw = str(code or "").strip()
+        if not raw:
+            return None
+        if raw in reports:
+            return raw
+        lower = raw.lower()
+        if lower in reports:
+            return lower
+        for key in reports:
+            if key.lower() == lower:
+                return key
+        return None
+
+    def get_report_meta(self, code: str) -> Optional[dict]:
+        key = self.resolve_report_code(code)
+        if key is None:
+            return None
+        return self.all_reports().get(key)
+
     def client_scope(self, meta: dict) -> Optional[List[str]]:
         raw = meta.get("clients")
         if not raw:
@@ -127,7 +158,7 @@ class ConfigRegistry:
         return out
 
     def report_label(self, code: str) -> str:
-        meta = self.all_reports().get(code) or {}
+        meta = self.get_report_meta(code) or {}
         return str(meta.get("label", code))
 
     def stage_menu_options(

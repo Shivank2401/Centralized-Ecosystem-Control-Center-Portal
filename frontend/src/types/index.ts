@@ -36,9 +36,11 @@ export type Report = {
   enabled: boolean
   output_subdir?: string | null
   menu_order?: number | null
+  description?: string | null
   module_file_exists: boolean
   module_importable: boolean
   package_path?: string | null
+  validation_ok?: boolean
 }
 
 export type RunSequence = {
@@ -230,6 +232,7 @@ export type LogReportEntry = {
   file_count: number
   files: ExploreFile[]
   latest?: ExploreFile | null
+  latest_modified?: string | null
 }
 
 export type LogClientIndex = {
@@ -290,3 +293,9 @@ export type ApiErrorBody = {
 }
 
 export type ApiResponse<T> = ApiSuccess<T> | ApiErrorBody
+
+export type {
+  ReportScriptFile,
+  ReportScriptLink,
+  ReportScriptPackage,
+} from './reportScripts'

@@ -10,6 +10,7 @@ from pipeline_engine.models import PipelineRunStatus, ReportResult
 from pipeline_engine.registry import ConfigRegistry
 from pipeline_engine.run_manager import RunCancelled, RunManager
 from pipeline_engine.validation import PipelineValidator
+from config_manager.report_helpers import print_script_completed
 
 
 def adapt_result(raw: Any) -> ReportResult:
@@ -77,7 +78,78 @@ class PipelineExecutor:
             raw = runner(**kwargs)
         except TypeError:
             raw = runner()
+        short_name = module_path.rsplit(".", 1)[-1]
+        detail = ""
+        geos = kwargs.get("geos")
+        if isinstance(geos, (list, tuple)) and geos:
+            detail = f"geo={','.join(str(g) for g in geos)}" if len(geos) <= 3 else f"geos={len(geos)}"
+        elif geos:
+            detail = f"geo={geos}"
+        print_script_completed(short_name, detail=detail)
         return adapt_result(raw)
+
+    @staticmethod
+    def _is_geo_scoped_module(module_path: Optional[str]) -> bool:
+        """
+        True when the script meaningfully filters by geos.
+
+        Geo-scoped modules are invoked once per geography so portal progress
+        can advance incrementally. Modules that ignore geos stay as one unit.
+        """
+        module = str(module_path or "")
+        if not module:
+            return False
+        # Known geo-agnostic (or interactive) entrypoints — never split.
+        non_scoped = (
+            "threeG_nd_updike",
+            "all_helper_files",
+            "SC_inventory",
+            "invalid_skus",
+            "utility_codes",
+            "download_cogs",
+            "saving_raw_file_on_date",
+            "b_check_duplicate_image",
+            "c_convert_json_to_csv",
+            "a_import_any_file_to_mysql",
+            "decomposition_chart",  # often period-driven; still accepts geos but batch is fine
+        )
+        if any(token in module for token in non_scoped):
+            return False
+        # Default: split by geo for incremental portal progress.
+        return True
+
+    def _plan_report_jobs(
+        self,
+        clients: Sequence[str],
+        geos: Sequence[str],
+        reports: Sequence[str],
+    ) -> List[tuple[str, dict, str, List[str]]]:
+        """
+        Build runnable jobs: (report_key, meta, client, geos_batch).
+
+        Geo-scoped reports yield one job per geography; others one job per
+        client with the full matching geo list.
+        """
+        reports_cfg = self.registry.all_reports()
+        jobs: List[tuple[str, dict, str, List[str]]] = []
+        for report in reports:
+            meta = reports_cfg.get(report)
+            if not meta or not meta.get("enabled", True):
+                continue
+            geo_scoped = self._is_geo_scoped_module(meta.get("module"))
+            for client in clients:
+                if not self.registry.matches_clients(meta, [client]):
+                    continue
+                allowed = set(self.registry.geographies(client))
+                client_geos = [g for g in geos if g in allowed]
+                if not client_geos:
+                    continue
+                if geo_scoped:
+                    for geo in client_geos:
+                        jobs.append((report, meta, client, [geo]))
+                else:
+                    jobs.append((report, meta, client, list(client_geos)))
+        return jobs
 
     def run_reports(
         self,
@@ -88,9 +160,12 @@ class PipelineExecutor:
         run_id: Optional[str] = None,
     ) -> List[ReportResult]:
         reports_cfg = self.registry.all_reports()
-        total = len(reports)
+        jobs = self._plan_report_jobs(clients, geos, reports)
+        total_units = len(jobs) or 1
         results: List[ReportResult] = []
         completed: List[str] = []
+        done_units = 0
+        n_reports = len(reports)
 
         for step, report in enumerate(reports, start=1):
             if run_id and self.track_runs and self.run_manager.is_cancel_requested(run_id):
@@ -98,34 +173,50 @@ class PipelineExecutor:
 
             meta = reports_cfg.get(report)
             if not meta or not meta.get("enabled", True):
-                self._log(f"  [{step}/{total}] [skip] report {report}", run_id)
+                self._log(f"  [{step}/{n_reports}] [skip] report {report}", run_id)
                 continue
 
             label = self.registry.report_label(report)
-            self._log(f"\n--- Sequence step {step}/{total}: {label} [{report}] ---", run_id)
+            self._log(f"\n--- Sequence step {step}/{n_reports}: {label} [{report}] ---", run_id)
             if run_id and self.track_runs:
                 self.run_manager.mark_progress(
                     run_id,
                     current_report=report,
                     completed=completed,
-                    progress=((step - 1) / total) * 100.0 if total else 0.0,
+                    progress=(done_units / total_units) * 100.0,
                 )
 
-            for client in clients:
+            report_jobs = [j for j in jobs if j[0] == report]
+            if not report_jobs:
+                self._log(f"  [skip] {report}: no matching client/geo jobs", run_id)
+
+            for _report_key, job_meta, client, geo_batch in report_jobs:
                 if run_id and self.track_runs and self.run_manager.is_cancel_requested(run_id):
                     raise RunCancelled(run_id)
-                if not self.registry.matches_clients(meta, [client]):
-                    self._log(f"  [skip] {client} / {report} (client-specific report)", run_id)
-                    continue
-                allowed = set(self.registry.geographies(client))
-                client_geos = [g for g in geos if g in allowed]
-                if not client_geos:
-                    self._log(f"  [skip] {client}: no matching geographies in selection", run_id)
-                    continue
-                self._log(f"  {client} / {report} / geos={client_geos}", run_id)
+                geo_label = ",".join(geo_batch)
+                self._log(f"  {client} / {report} / geo={geo_label}", run_id)
+                if run_id and self.track_runs:
+                    # Small bump as soon as a geo starts (not only when it finishes).
+                    started = (done_units + 0.15) / total_units * 100.0
+                    self.run_manager.mark_progress(
+                        run_id,
+                        current_report=report,
+                        completed=completed,
+                        progress=min(99.0, started),
+                    )
                 results.append(
-                    self.import_and_run(meta.get("module"), client=client, geos=client_geos)
+                    self.import_and_run(
+                        job_meta.get("module"), client=client, geos=geo_batch
+                    )
                 )
+                done_units += 1
+                if run_id and self.track_runs:
+                    self.run_manager.mark_progress(
+                        run_id,
+                        current_report=report,
+                        completed=completed,
+                        progress=(done_units / total_units) * 100.0,
+                    )
 
             completed.append(report)
             if run_id and self.track_runs:
@@ -133,7 +224,7 @@ class PipelineExecutor:
                     run_id,
                     current_report=None,
                     completed=completed,
-                    progress=(step / total) * 100.0 if total else 100.0,
+                    progress=(done_units / total_units) * 100.0,
                 )
         return results
 
@@ -158,14 +249,25 @@ class PipelineExecutor:
             geo_list = self.registry.all_geo_codes()
 
         if reports is not None:
-            report_list = [r.strip().lower() for r in reports]
+            tokens = [str(r).strip() for r in reports if str(r).strip()]
         elif report is not None:
             if isinstance(report, str):
-                report_list = [r.strip().lower() for r in report.split(",") if r.strip()]
+                tokens = [r.strip() for r in report.split(",") if r.strip()]
             else:
-                report_list = [r.strip().lower() for r in report]
+                tokens = [str(r).strip() for r in report if str(r).strip()]
         else:
             raise ValueError("Provide reports= or report=")
+
+        report_list: list[str] = []
+        unresolved: list[str] = []
+        for tok in tokens:
+            key = self.registry.resolve_report_code(tok)
+            if key is None:
+                unresolved.append(tok)
+            else:
+                report_list.append(key)
+        if unresolved:
+            raise ValueError(f"Unknown report(s): {', '.join(unresolved)}")
 
         track_runs = self.track_runs if track is None else track
         active_run_id: Optional[str] = run_id

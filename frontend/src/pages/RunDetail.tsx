@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { useEffect, useRef } from 'react'
 import { Ban, CheckCircle2, Circle, Loader2 } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRun } from '@/hooks/useApi'
@@ -25,6 +26,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const live = useRunLiveLogs(runId)
   const toast = useToast()
   const queryClient = useQueryClient()
+  const logRef = useRef<HTMLPreElement>(null)
+  const stickToBottom = useRef(true)
 
   const cancel = useMutation({
     mutationFn: () => api.cancelRun(runId),
@@ -36,10 +39,18 @@ export function RunDetailPage({ runId }: { runId: string }) {
       toast.push({
         kind: 'error',
         title: 'Cancel failed',
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: err instanceof Error ? err.message : undefined,
       })
     },
   })
+
+  const logText = live.text || (run.data?.logs.join('\n') ?? '') || 'Waiting for output…'
+
+  useEffect(() => {
+    const el = logRef.current
+    if (!el || !stickToBottom.current) return
+    el.scrollTop = el.scrollHeight
+  }, [logText])
 
   if (run.isLoading) return <Spinner label="Loading run…" />
   if (run.error) {
@@ -159,11 +170,18 @@ export function RunDetailPage({ runId }: { runId: string }) {
       <Panel>
         <PanelHeader title="Live logs" description="runtime/runs/{id}/stdout.log" />
         <pre
+          ref={logRef}
+          onScroll={() => {
+            const el = logRef.current
+            if (!el) return
+            const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+            stickToBottom.current = distanceFromBottom < 80
+          }}
           className={cn(
             'max-h-[420px] overflow-auto bg-[#0b0f14] p-4 font-mono text-xs leading-relaxed text-teal-100',
           )}
         >
-          {live.text || data.logs.join('\n') || 'Waiting for output…'}
+          {logText}
         </pre>
       </Panel>
     </div>

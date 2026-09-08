@@ -13,7 +13,7 @@ cd frontend && npm install && npm run dev
 # → http://127.0.0.1:5173  |  API → http://127.0.0.1:8000
 ```
 
-**Phase 5–6:** Add Report / Registry · Data → Outputs, Logs, COGS, Pincode · Diagnostics.
+**Configuration Center:** Sidebar → Configuration (Overview, Clients, Geos, Reports, Stages, Sequences, Paths & Environment, Files, History).
 
 CLI: `python run_pipeline.py`
 

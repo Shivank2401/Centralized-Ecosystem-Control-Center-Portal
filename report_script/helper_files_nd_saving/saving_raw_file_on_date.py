@@ -462,5 +462,8 @@ def run_main(inventory_base: Optional[Path] = None) -> List[Path]:
 
 
 if __name__ == "__main__":
+    from config_manager.report_helpers import print_script_completed
+
     cli_base = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else None
     run_main(inventory_base=cli_base)
+    print_script_completed("saving_raw_file_on_date")

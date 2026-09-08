@@ -55,7 +55,6 @@ class PipelineValidator:
         checks: List[CheckResult] = []
         clients_u = [c.strip().upper() for c in clients]
         geos_u = [g.strip().upper() for g in geos]
-        reports_l = [r.strip().lower() for r in reports]
         known_clients = self.registry.clients()
 
         for client in clients_u:
@@ -106,9 +105,9 @@ class PipelineValidator:
                     )
 
         all_reports = self.registry.all_reports()
-        for report in reports_l:
-            meta = all_reports.get(report)
-            if meta is None:
+        for report in reports:
+            key = self.registry.resolve_report_code(str(report).strip())
+            if key is None:
                 checks.append(
                     CheckResult(
                         name=f"report:{report}",
@@ -118,20 +117,21 @@ class PipelineValidator:
                     )
                 )
                 continue
+            meta = all_reports[key]
             if not meta.get("enabled", True):
                 checks.append(
                     CheckResult(
-                        name=f"report:{report}",
+                        name=f"report:{key}",
                         ok=False,
                         level="ERROR",
-                        message=f"Report {report} is disabled",
+                        message=f"Report {key} is disabled",
                     )
                 )
                 continue
             if clients_u and not self.registry.matches_clients(meta, clients_u):
                 checks.append(
                     CheckResult(
-                        name=f"report:{report}:clients",
+                        name=f"report:{key}:clients",
                         ok=False,
                         level="WARNING",
                         message=f"Report not available for selected clients {clients_u}",
@@ -141,17 +141,17 @@ class PipelineValidator:
             else:
                 checks.append(
                     CheckResult(
-                        name=f"report:{report}",
+                        name=f"report:{key}",
                         ok=True,
                         level="PASS",
-                        message=str(meta.get("label", report)),
+                        message=str(meta.get("label", key)),
                     )
                 )
             module = str(meta.get("module") or "")
             if not module:
                 checks.append(
                     CheckResult(
-                        name=f"module:{report}",
+                        name=f"module:{key}",
                         ok=False,
                         level="ERROR",
                         message="No module wired in report.yaml",
@@ -162,7 +162,7 @@ class PipelineValidator:
                 importable = self.discovery.module_importable(module)
                 checks.append(
                     CheckResult(
-                        name=f"module:{report}",
+                        name=f"module:{key}",
                         ok=exists and importable,
                         level="ERROR" if not (exists and importable) else "PASS",
                         message=(
