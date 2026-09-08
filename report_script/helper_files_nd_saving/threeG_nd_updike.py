@@ -74,7 +74,7 @@ def main():
         os.makedirs(current_month_folder)
 
     # Define the filename
-    filename = "inventory_" + datestr + ".csv"
+    filename = "inventory_{datestr}.csv"
 
     # Define the file path
     file_path = os.path.join(current_month_folder, filename)
@@ -602,7 +602,7 @@ def main():
         os.makedirs(current_month_folder)
 
     # Define the file path
-    file_path = os.path.join(current_month_folder, "Updike_WH_Database_" + datestr + ".xlsx")
+    file_path = os.path.join(current_month_folder, "Updike_WH_Database_{datestr}.xlsx")
 
     # Export the Excel file
     with pd.ExcelWriter(file_path) as writer:
@@ -630,7 +630,7 @@ def main():
         os.makedirs(current_month_folder)
 
     # Define the filename
-    filename = "stock_status_report_" + datestr + ".xlsx"
+    filename = "stock_status_report_{datestr}.xlsx"
 
     # Define the file path
     file_path = os.path.join(current_month_folder, filename)
@@ -1200,7 +1200,7 @@ def main():
     ageing.rename(columns = {'Unnamed: 0' : 'SKU','Unnamed: 2' : 'On Hand', 'Unnamed: 3': 'Available', 'Unnamed: 4': 'Allocated'}, inplace = True)
 
     #saving raw file
-    ageing.to_excel(INV / r"us/input/3G/inventory_ageing/2026/Jan-2026/inventory_ageing_"+datestr+".xlsx",index = False)
+    ageing.to_excel(INV / r"us/input/3G/inventory_ageing/2026/Jan-2026/inventory_ageing_{datestr}.xlsx",index = False)
     ageing.head()
 
     # --- notebook cell 217 ---
@@ -1234,7 +1234,7 @@ def main():
         os.makedirs(current_month_folder)
 
     # Define the file path
-    file_path = os.path.join(current_month_folder, "3G_WH_Database_" + datestr + ".xlsx")
+    file_path = os.path.join(current_month_folder, "3G_WH_Database_{datestr}.xlsx")
 
     # Export the Excel file
     with pd.ExcelWriter(file_path) as writer:
