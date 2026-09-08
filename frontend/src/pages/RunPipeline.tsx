@@ -161,7 +161,7 @@ export function RunPipelinePage() {
             className={cn(
               'rounded-md px-3 py-1.5 font-mono text-xs',
               i === step
-                ? 'bg-[var(--accent)] text-white dark:text-ink'
+                ? 'bg-[var(--accent)] text-white'
                 : i < step
                   ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
                   : 'border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg-muted)]',

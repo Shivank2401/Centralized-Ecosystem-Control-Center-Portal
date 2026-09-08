@@ -4,7 +4,7 @@ import { cn } from '@/utils/cn'
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
 
 const variants: Record<Variant, string> = {
-  primary: 'bg-[var(--accent)] text-white dark:text-ink hover:opacity-90 disabled:opacity-50',
+  primary: 'bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50',
   secondary:
     'border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg)] hover:border-[var(--accent)]',
   ghost: 'text-[var(--fg-muted)] hover:bg-[var(--accent-soft)] hover:text-[var(--fg)]',

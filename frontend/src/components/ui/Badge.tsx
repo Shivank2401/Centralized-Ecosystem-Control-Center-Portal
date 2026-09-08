@@ -15,7 +15,8 @@ export function Badge({
         tone === 'ok' && 'bg-emerald-500/15 text-[var(--color-ok)]',
         tone === 'warn' && 'bg-amber-500/15 text-[var(--color-warn)]',
         tone === 'danger' && 'bg-red-500/15 text-[var(--color-danger)]',
-        tone === 'accent' && 'bg-[var(--accent-soft)] text-[var(--accent)]',
+        tone === 'accent' &&
+          'border border-[var(--border)] bg-white text-[var(--accent)] dark:border-transparent',
       )}
     >
       {children}
