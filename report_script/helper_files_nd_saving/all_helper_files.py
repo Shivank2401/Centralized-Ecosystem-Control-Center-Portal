@@ -469,8 +469,8 @@ def main():
 
     convertor_main = convertor_main.drop(convertor_main[convertor_main.SKU.isnull()].index)
 
-    # --- notebook cell 58 ---
-    convertor_main.to_excel((DEMAND_ROOT or CENTRAL) / r"input files/helper_essential.xlsx", index = False)
+    # # --- notebook cell 58 ---
+    # convertor_main.to_excel((DEMAND_ROOT or CENTRAL) / r"input files/helper_essential.xlsx", index = False)
 
     # --- notebook cell 59 ---
     with pd.ExcelWriter(INV / r"dashboard_essential_files/Country_helper.xlsx") as writer:
