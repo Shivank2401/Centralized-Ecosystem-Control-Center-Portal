@@ -9,6 +9,12 @@ Covers:
   - Local: PROCESSED_ROOT/shipping_queue/ESH-{cc}-Amazon_Shipping_Queue_azure.csv
   - Azure out: sanity_data/shipping_queue/{cc}_amazon_shipping_queue.csv (+ parquet)
 
+Adding a NEW client:
+  Prefer a dedicated script (like knc_shipping_queue.py) with its own env keys,
+  or register CLIENT_CONFIGS below if paths/COGS alias rules match ESH.
+
+Style: step-by-step prints (>>> STEP). Clean/discrepancy formulas unchanged.
+
 Run:
     python report_script/shipping_queue/esh_shipping_queue.py
     python report_script/shipping_queue/esh_shipping_queue.py --countries US,AE
@@ -20,12 +26,62 @@ import argparse
 import io
 import os
 import re
+import sys
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from io import StringIO
+from pathlib import Path
+from typing import Callable, Dict, Optional, Sequence
+
 import numpy as np
 import pandas as pd
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from dotenv import load_dotenv
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from config_manager.report_helpers import print_script_completed
+
+# =============================================================================
+# Client configuration (ESH — KNC lives in knc_shipping_queue.py)
+# =============================================================================
+
+CLIENT = "ESH"
+
+
+@dataclass(frozen=True)
+class ShippingQueueClientConfig:
+    client_code: str
+    local_file_prefix: str
+    processed_root_env: str
+    default_processed_root: str
+    geo_env_pattern: str
+
+
+def _esh_config() -> ShippingQueueClientConfig:
+    return ShippingQueueClientConfig(
+        client_code="ESH",
+        local_file_prefix="ESH",
+        processed_root_env="PROCESSED_ROOT",
+        default_processed_root="processed_output",
+        geo_env_pattern=r"^cogs_sheet_([a-z0-9_]+)$",
+    )
+
+
+CLIENT_CONFIGS: Dict[str, Callable[[], ShippingQueueClientConfig]] = {
+    "ESH": _esh_config,
+}
+
+
+def get_client_config(client: str = CLIENT) -> ShippingQueueClientConfig:
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"esh_shipping_queue supports {known} only (got '{client}')")
+    return CLIENT_CONFIGS[key]()
+
 
 # =============================================================================
 # STORAGE PATHS — where files live (input vs output)
@@ -582,6 +638,7 @@ def process_country(
 
     print(f"\n{'=' * 60}\nShipping Queue — {cc} — START\n{'=' * 60}")
 
+    print(f"\n>>> STEP: [{cc}] load COGS / SKU mapping")
     try:
         product_cat = load_cogs_from_azure(cc)
     except FileNotFoundError as exc:
@@ -593,6 +650,7 @@ def process_country(
     convertor = product_cat.loc[:, ["SKU", *COGS_ALIAS_COLS]].drop_duplicates()
     sku_mapping = build_sku_mapping(convertor)
 
+    print(f"\n>>> STEP: [{cc}] download raw shipping queue")
     try:
         raw = download_shipping_queue_csv(
             country_code=cc,
@@ -606,6 +664,7 @@ def process_country(
         print(f"{prefix} Download failed: {exc}")
         raw = pd.DataFrame()
 
+    print(f"\n>>> STEP: [{cc}] clean / map SKUs / discrepancy")
     out_df = process_shipping_queue(raw, sku_mapping=sku_mapping)
     if out_df.empty:
         print(f"{prefix} No rows after processing.")
@@ -613,6 +672,7 @@ def process_country(
 
     out_df["country"] = cc
 
+    print(f"\n>>> STEP: [{cc}] save local CSV")
     os.makedirs(output_folder, exist_ok=True)
     local_path = os.path.join(
         output_folder,
@@ -622,6 +682,7 @@ def process_country(
     print(f"{prefix} Local CSV ({len(final_df)} rows): {local_path}")
 
     if upload_to_azure:
+        print(f"\n>>> STEP: [{cc}] upload processed CSV/Parquet to Azure")
         try:
             upload_processed_to_azure(final_df, cc)
         except Exception as exc:
@@ -636,7 +697,7 @@ def process_country(
 # =============================================================================
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Clean Amazon shipping queue exports by country (Azure in/out)."
     )
@@ -671,33 +732,38 @@ def parse_args() -> argparse.Namespace:
         default=".env",
         help="Path to .env file (default: .env in current directory).",
     )
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def _run_with_args(args: argparse.Namespace) -> list[str]:
     load_dotenv(args.env_file)
 
+    print(f"\n>>> STEP: setup ESH shipping queue (client={CLIENT})")
     global PROCESSED_ROOT, DEFAULT_OUTPUT_FOLDER
     PROCESSED_ROOT = _clean_env(os.getenv("PROCESSED_ROOT", PROCESSED_ROOT))
-    if args.output_folder == DEFAULT_OUTPUT_FOLDER:
-        DEFAULT_OUTPUT_FOLDER = os.path.join(PROCESSED_ROOT, "shipping_queue")
+    default_out = os.path.join(PROCESSED_ROOT, "shipping_queue")
+    if not args.output_folder or args.output_folder == DEFAULT_OUTPUT_FOLDER:
+        DEFAULT_OUTPUT_FOLDER = default_out
+        output_folder = default_out
+    else:
+        output_folder = args.output_folder
 
+    print("\n>>> STEP: load geographies from .env")
     geographies = load_geographies_from_env()
     if not geographies:
         print("No cogs_sheet_* entries in .env — cannot resolve countries.")
-        return
+        return []
 
     day: date | None = None
     if args.day:
-        day = datetime.strptime(args.day.strip(), "%Y-%m-%d").date()
+        day = datetime.strptime(str(args.day).strip(), "%Y-%m-%d").date()
 
-    requested = [c.strip().lower() for c in args.countries.split(",") if c.strip()]
+    requested = [c.strip().lower() for c in str(args.countries).split(",") if c.strip()]
     if not requested or "all" in requested:
         selected = sorted(geographies.keys())
     else:
-        selected: list[str] = []
-        unknown: list[str] = []
+        selected = []
+        unknown = []
         for raw in requested:
             try:
                 code = normalize_country_code(raw)
@@ -713,17 +779,15 @@ def main() -> None:
 
     if not selected:
         print("No valid countries selected.")
-        return
-
-    output_folder = args.output_folder
-    if output_folder == DEFAULT_OUTPUT_FOLDER and PROCESSED_ROOT:
-        output_folder = os.path.join(PROCESSED_ROOT, "shipping_queue")
+        return []
 
     print(f"Countries: {', '.join(selected)}")
     print(f"Local output folder: {output_folder}")
     print(f"Azure processed CSV prefix:    {PROCESSED_CSV_PREFIX}/")
     print(f"Azure processed Parquet prefix: {PROCESSED_PARQUET_PREFIX}/")
 
+    print("\n>>> STEP: process selected countries")
+    finished: list[str] = []
     for code in selected:
         path = process_country(
             geographies[code],
@@ -734,10 +798,58 @@ def main() -> None:
         )
         if path:
             print(f"Finished: {path}")
+            finished.append(path)
+
+    print(f"\n>>> STEP: ESH shipping queue complete ({len(finished)} file(s))")
+    return finished
 
 
-from config_manager.report_helpers import print_script_completed
+def run(
+    *,
+    client: str = CLIENT,
+    geos: Optional[Sequence[str]] = None,
+    countries: Optional[str] = None,
+    output_folder: Optional[str] = None,
+    lookback_days: int = 7,
+    day: Optional[str] = None,
+    no_azure_upload: bool = False,
+    env_file: str = ".env",
+    **_kwargs,
+) -> list[str]:
+    """Pipeline CLI entrypoint: run(client='ESH', geos=['US','AE'])."""
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        print(
+            f"[skip] esh_shipping_queue supports {', '.join(sorted(CLIENT_CONFIGS))} "
+            f"only (got client={client})"
+        )
+        return []
+
+    cfg = get_client_config(key)
+    print(f"ESH shipping queue (client={cfg.client_code})")
+
+    if countries:
+        country_arg = str(countries)
+    elif geos:
+        country_arg = ",".join(str(g).strip() for g in geos if str(g).strip())
+    else:
+        country_arg = "ALL"
+
+    ns = argparse.Namespace(
+        countries=country_arg,
+        output_folder=output_folder or DEFAULT_OUTPUT_FOLDER,
+        lookback_days=lookback_days,
+        day=day or "",
+        no_azure_upload=no_azure_upload,
+        env_file=env_file,
+    )
+    return _run_with_args(ns)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> list[str]:
+    return _run_with_args(parse_args(argv))
+
 
 if __name__ == "__main__":
     main()
-    print_script_completed('esh_shipping_queue')
+    print_script_completed("esh_shipping_queue")

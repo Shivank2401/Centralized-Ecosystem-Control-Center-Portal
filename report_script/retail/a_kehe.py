@@ -7,6 +7,14 @@ Covers:
   - Azure CSV append (CONTAINER_NAME_ESH / sanity_data/retail/):
       kehe_age_inventory, kehe_chain_store, kehe_ksolve_overall, kehe_inventory
 
+Adding a NEW client (paths only — transforms are KeHE/ESH-specific today):
+  1. Add client in client.yaml / layouts + retail root env
+  2. Register in CLIENT_CONFIGS below
+  3. Adapt distributor path layout if needed
+  4. List the client on this report in report.yaml
+
+Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
+
 Run:
     python report_script/retail/a_kehe.py
     python report_script/retail/a_kehe.py --skip-azure
@@ -17,9 +25,10 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -41,6 +50,39 @@ KEHE_AZURE_BLOBS = {
     "k_solve_overall": "sanity_data/retail/kehe_ksolve_overall.csv",
     "kehe_inventory": "sanity_data/retail/kehe_inventory.csv",
 }
+
+
+# =============================================================================
+# Client configuration (ESH today — register more when layouts exist)
+# =============================================================================
+
+CLIENT = "ESH"
+
+
+@dataclass(frozen=True)
+class KeheClientConfig:
+    client_code: str
+    retail_root: Path
+
+
+def _esh_config() -> KeheClientConfig:
+    return KeheClientConfig(
+        client_code="ESH",
+        retail_root=cfg_paths.esh_retail_root(),
+    )
+
+
+CLIENT_CONFIGS: Dict[str, Callable[[], KeheClientConfig]] = {
+    "ESH": _esh_config,
+}
+
+
+def get_client_config(client: str = CLIENT) -> KeheClientConfig:
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"KeHE retail supports {known} only (got '{client}')")
+    return CLIENT_CONFIGS[key]()
 
 
 def _walk_files(folder: Path) -> List[Path]:
@@ -102,12 +144,15 @@ def _aged_month_from_filename(name: str) -> str:
     return name.split("_")[len(name.split("-")) - 1].split(".")[0]
 
 
-def main(*, skip_azure: bool = False) -> dict:
+def main(*, skip_azure: bool = False, client: str = CLIENT) -> dict:
     """KeHE processing body (paths from .env; logic unchanged)."""
-    retail = cfg_paths.esh_retail_root()
+    cfg = get_client_config(client)
+    retail = cfg.retail_root
     kehe = retail / "us/input/distributors/kehe"
     archive_year = datetime.now().strftime("%Y")
 
+    print(f"\n>>> STEP: setup dates + UPC helper (client={cfg.client_code})")
+    print(f"  retail root: {retail}")
     datestr = pd.to_datetime("today").strftime("%d-%b-%Y")
     datestr_month_C = pd.to_datetime("today").strftime("%b-%Y")
     previous_month_date = datetime.now() - relativedelta(months=1)
@@ -121,6 +166,7 @@ def main(*, skip_azure: bool = False) -> dict:
 
     upc_helper = _load_upc_helper(retail)
 
+    print("\n>>> STEP: K-solve (invoices + history)")
     # --- K-solve (Invoices Updates) ---
     k_solve_overall = pd.read_excel(
         kehe / "kehe_invoices/Kehe Deductions.xlsx",
@@ -164,6 +210,7 @@ def main(*, skip_azure: bool = False) -> dict:
     k_solve_overall = pd.merge(k_solve, k_solve_overall, on="Invoice #", how="outer")
     k_solve_overall.rename(columns={"Invoice #": "Invoice"}, inplace=True)
 
+    print("\n>>> STEP: aged inventory archive + history")
     # --- Aged inventory ---
     aged_src = kehe / "aged inventory/Aged Inventory by Brand.csv"
     aged_archive_dir = kehe / f"aged inventory/{archive_year}"
@@ -252,6 +299,7 @@ def main(*, skip_azure: bool = False) -> dict:
 
     Kehe_aged = Kehe_aged.merge(upc_helper, on="UPC", how="left")
 
+    print("\n>>> STEP: chain store — item qty (eaches)")
     # --- Chain Store: Item Qty (eaches) ---
     chain_root = kehe / "Chain"
     qty_archive = chain_root / f"item_quantity(in_eaches)/{archive_year}"
@@ -313,6 +361,7 @@ def main(*, skip_azure: bool = False) -> dict:
         chain_store_qty.Retailer,
     )
 
+    print("\n>>> STEP: chain store — list wholesale")
     # --- Chain Store: List wholesale ---
     wholesale_archive = chain_root / f"item_list_wholesale/{archive_year}"
     wholesale_archive.mkdir(parents=True, exist_ok=True)
@@ -373,6 +422,7 @@ def main(*, skip_azure: bool = False) -> dict:
         list_wholesale.Retailer,
     )
 
+    print("\n>>> STEP: chain store — vendor cost")
     # --- Chain Store: Vendor cost ---
     vendor_archive = chain_root / f"vendor_cost/{archive_year}"
     vendor_archive.mkdir(parents=True, exist_ok=True)
@@ -431,6 +481,7 @@ def main(*, skip_azure: bool = False) -> dict:
         vendor_cost.Retailer,
     )
 
+    print("\n>>> STEP: collate chain store + case cost / markup")
     # --- Collate chain store ---
     Kehe_Chain_Store = (
         vendor_cost.merge(
@@ -471,6 +522,7 @@ def main(*, skip_azure: bool = False) -> dict:
         - Kehe_Chain_Store["Ordered_Case_Cost_(Vendor_Cost)"]
     ) / Kehe_Chain_Store["Ordered_Case_Cost_(Vendor_Cost)"]
 
+    print("\n>>> STEP: inventory + inventory at risk")
     # --- Inventory + inventory at risk ---
     inv_root = kehe / "Inventory"
     stock_archive = inv_root / "inventory_stock_status"
@@ -495,6 +547,7 @@ def main(*, skip_azure: bool = False) -> dict:
     inventory_risk = pd.merge(inventory_risk, upc_helper, on="UPC", how="left")
     kehe_inventory = pd.merge(kehe_inventory, inventory_risk, how="outer")
 
+    print("\n>>> STEP: save Kehe-All.xlsx (dashboard + backup)")
     dashboard_path = retail / "Retail-Dashboard_Files/Kehe-All.xlsx"
     backup_dir = retail / "us/output/Kehe/Kehe Database Files"
     dashboard_path.parent.mkdir(parents=True, exist_ok=True)
@@ -525,6 +578,7 @@ def main(*, skip_azure: bool = False) -> dict:
     print(f"KeHE dashboard : {dashboard_path}")
     print(f"KeHE backup    : {backup_path}")
 
+    print("\n>>> STEP: Azure CSV append (KeHE datasets)")
     azure_frames = {
         "kehe_aged": sheets["Kehe-Age_Invento"],
         "kehe_Chain_Store": sheets["Kehe_Chain_Store"],
@@ -539,6 +593,7 @@ def main(*, skip_azure: bool = False) -> dict:
         skip_azure=skip_azure,
     )
 
+    print("\n>>> STEP: KeHE complete")
     return {
         "aged": sheets["Kehe-Age_Invento"],
         "chain_store": sheets["Kehe_Chain_Store"],
@@ -553,19 +608,21 @@ def main(*, skip_azure: bool = False) -> dict:
 
 def run(
     *,
-    client: str = "ESH",
+    client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     skip_azure: bool = False,
     **_kwargs,
 ) -> dict:
     """Pipeline CLI entrypoint: run(client='ESH')."""
     del geos
-    if str(client).upper() != "ESH":
-        print(f"[skip] KeHE retail script is ESH-only (got client={client})")
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        print(f"[skip] KeHE retail supports {', '.join(sorted(CLIENT_CONFIGS))} only (got client={client})")
         return {}
-    print(f"KeHE retail report (client={client})")
-    print(f"Retail root: {cfg_paths.esh_retail_root()}")
-    return main(skip_azure=skip_azure)
+    cfg = get_client_config(key)
+    print(f"KeHE retail report (client={cfg.client_code})")
+    print(f"Retail root: {cfg.retail_root}")
+    return main(skip_azure=skip_azure, client=key)
 
 
 if __name__ == "__main__":

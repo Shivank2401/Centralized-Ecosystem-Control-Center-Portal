@@ -7,7 +7,14 @@ Covers:
   - Container_Data + Country_helper + Container_WAC under dashboard_essential_files/
   - WH_Orders_Standard_File (3G + Updike), WH_Receipts_Standard_File, Walmart_all_shipment.xlsx
 
-Notebook-converted; processing preserved; SKU helpers via esh_sku_cleaning.
+Adding a NEW client (paths only — transforms are ESH helper-specific today):
+  1. Add client in client.yaml / layouts + inventory/central roots
+  2. Register in CLIENT_CONFIGS below
+  3. Adapt path roots if folder layout differs
+  4. List the client on this report in report.yaml
+
+Style: step-by-step prints (>>> STEP). ETL / notebook formulas unchanged.
+Run after nothing special; threeG_nd_updike depends on this script's WH_* outputs.
 
 Run:
     python report_script/helper_files_nd_saving/all_helper_files.py
@@ -16,7 +23,9 @@ Run:
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Dict, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
@@ -27,16 +36,57 @@ from config_manager.esh_sku_cleaning import (
     mapping_from_convertor_helper,
 )
 from config_manager import paths as cfg_paths
+from config_manager.report_helpers import print_script_completed
 
 
+# =============================================================================
+# Client configuration (ESH today — register more when layouts exist)
+# =============================================================================
+
+CLIENT = "ESH"
 
 
-def main():
+@dataclass(frozen=True)
+class HelperClientConfig:
+    client_code: str
+    inventory_root: Path
+    central_root: Path
+    demand_root: Optional[Path]
+
+
+def _esh_config() -> HelperClientConfig:
+    return HelperClientConfig(
+        client_code="ESH",
+        inventory_root=cfg_paths.esh_inventory_root(),
+        central_root=cfg_paths.esh_central_root(),
+        demand_root=cfg_paths.esh_demand_instock_root(),
+    )
+
+
+CLIENT_CONFIGS: Dict[str, Callable[[], HelperClientConfig]] = {
+    "ESH": _esh_config,
+}
+
+
+def get_client_config(client: str = CLIENT) -> HelperClientConfig:
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"all_helper_files supports {known} only (got '{client}')")
+    return CLIENT_CONFIGS[key]()
+
+
+def main(client: str = CLIENT):
     """Converted notebook body (processing logic unchanged)."""
+    cfg = get_client_config(client)
     # --- path roots from .env (no hardcoded OneDrive users) ---
-    INV = cfg_paths.esh_inventory_root()
-    CENTRAL = cfg_paths.esh_central_root()
-    DEMAND_ROOT = cfg_paths.esh_demand_instock_root()  # optional
+    INV = cfg.inventory_root
+    CENTRAL = cfg.central_root
+    DEMAND_ROOT = cfg.demand_root  # optional
+
+    print(f"\n>>> STEP: setup dates + roots (client={cfg.client_code})")
+    print(f"  INV={INV}")
+    print(f"  CENTRAL={CENTRAL}")
 
     # --- notebook cell 0 ---
     import pandas as pd
@@ -66,11 +116,11 @@ def main():
     datestr_T = pd.to_datetime("today").strftime("%d-%b-%Y")
     print(datestr_T)
 
+    print("\n>>> STEP: Shipbob active / inactive / bundle archives")
     # --- notebook cell 6 ---
     active = pd.read_excel(INV / r"us/input/shipbob/active.xlsx")
     inactive = pd.read_excel(INV / r"us/input/shipbob/inactive.xlsx")
     bundle = pd.read_excel(INV / r"us/input/shipbob/bundle.xlsx")
-
     # --- notebook cell 7 ---
     # active.to_excel(INV / r"us/input/shipbob/products_active/2024/feb/active_"+datestr_1+".xlsx",index = False)
     # inactive.to_excel(INV / r"us/input/shipbob/products_inactive/2024/feb/inactive_"+datestr_1+".xlsx",index = False)
@@ -81,6 +131,7 @@ def main():
     inactive.to_excel(INV / rf"us\input\shipbob\products_inactive\2024\feb\inactive_{datestr_1}.xlsx", index=False)
     bundle.to_excel(INV / rf"us\input\shipbob\products_bundle\2024\feb\bundle_{datestr_1}.xlsx", index=False)
 
+    print("\n>>> STEP: item master → convertor / convertor_helper / RMC")
     # --- notebook cell 10 ---
     item_master_main = pd.read_excel(CENTRAL / r"retail/us/input/item_master_data/item_details_master_sheet.xlsx")
     item_master_main.columns
@@ -138,6 +189,7 @@ def main():
     Raw_material_convertor = pd.concat([Base_WAC, Combo_WAC], axis=0)
     Raw_material_convertor.head()
 
+    print("\n>>> STEP: container tracking + SKU content ETL")
     # --- notebook cell 25 ---
     use_col_read = ["Container No. (Internal)","Container/ Tracking number (External)","Estimated Dispatched Date from Warehouse","Estimated Departure Date from Port",
                                  "Estimated Arrival Date on Port","Transit Time","WH_Arrival_Month","Origin Port","Destination Port","US WH Name","Delivered to WH Date","Reflecting in WH Inventory",
@@ -393,10 +445,12 @@ def main():
 
     container = pd.merge(container, container_price, on = "Reference_No", how = "left")
 
+    print("\n>>> STEP: save Container_Data.xlsx")
     # --- notebook cell 42 ---
     with pd.ExcelWriter(INV / r"IMS_new_Dashboard_files/Container_Data.xlsx") as writer:
         container.to_excel(writer, sheet_name = "Container", index = False)
         container_sku.to_excel(writer, sheet_name = "Container SKU", index = False)
+    print(f"  → {INV / r'IMS_new_Dashboard_files/Container_Data.xlsx'}")
 
     # --- notebook cell 44 ---
     max_SKU_box_case = container_sku.loc[:,["Container_No","SKU", "Box/Cases"]]
@@ -443,6 +497,7 @@ def main():
     compare = max_SKU_box_case.loc[:,["SKU", "Max"]]
     max_SKU_box_case.head()
 
+    print("\n>>> STEP: Container_WAC + Country_helper.xlsx")
     # --- notebook cell 48 ---
     wac = container_sku.drop(container_sku[container_sku.Status != "Reached" ].index)
     wac = wac.loc[:,["SKU","QTY in Box", "Total Amount /SKU (Inclusive Commission)" ]]
@@ -491,6 +546,7 @@ def main():
         RM_Base.to_excel(writer, sheet_name = "Base_RM", index = False)
         RM_combo.to_excel(writer, sheet_name = "Combo_RM", index = False)
 
+    print("\n>>> STEP: 3G all_orders → incom_data")
     # --- notebook cell 62 ---
     incoming = pd.read_csv(INV / r"us/input/3G/all_orders/all_orders.csv")
 
@@ -748,6 +804,7 @@ def main():
              pd.to_datetime(incom_data['Closed_Date']).dt.strftime('%d-%b-%Y'),
              pd.to_datetime(incom_data['Closed_Date'], dayfirst=False).dt.strftime('%d-%b-%Y'))
 
+    print("\n>>> STEP: Updike orders → Updk_New_order")
     # --- notebook cell 83 ---
     ### Old Format (Open & Closed) 
     col_list = ["CUSTOMERORDERNUMBER", "ORDERNUMBER","CARRIERNAME","CUSTOMERLOTREFERENCE", "STATUS", "WAREHOUSESKU", "QTY","Unnamed: 17"]
@@ -957,13 +1014,16 @@ def main():
              pd.to_datetime(Updk_New_order['Order_Closed_Date']).dt.strftime('%d-%b-%Y'),
              pd.to_datetime(Updk_New_order['Order_Closed_Date'], dayfirst=False).dt.strftime('%d-%b-%Y'))
 
+    print("\n>>> STEP: save WH_Orders_Standard_File.xlsx")
     # --- notebook cell 102 ---
     with pd.ExcelWriter(
         INV / r"dashboard_essential_files\WH_Orders_Standard_File.xlsx"
     ) as writer:
         incom_data.to_excel(writer, sheet_name = "3G-Orders", index = False)
         Updk_New_order.to_excel(writer, sheet_name = "Updike-Orders", index = False)
+    print(f"  → {INV / r'dashboard_essential_files/WH_Orders_Standard_File.xlsx'}")
 
+    print("\n>>> STEP: Updike receipts → UDreceipts")
     # --- notebook cell 106 ---
     UDreceipts_old = pd.read_excel(INV / r"us/input/updike/warehouse_receipts/warehousereceipts.xls")
 
@@ -1016,6 +1076,7 @@ def main():
         lambda x: pd.to_datetime(x).strftime("%d-%b-%Y") if pd.to_datetime(x, errors='coerce') is not pd.NaT else None)
     UDreceipts.head()
 
+    print("\n>>> STEP: 3G receipts → rect")
     # --- notebook cell 116 ---
     path =INV / r"us/input/3G/receipts"
 
@@ -1172,11 +1233,14 @@ def main():
 
     rect.head()
 
+    print("\n>>> STEP: save WH_Receipts_Standard_File.xlsx")
     # --- notebook cell 124 ---
     with pd.ExcelWriter(INV / r"dashboard_essential_files/WH_Receipts_Standard_File.xlsx") as writer:
         rect.to_excel(writer, sheet_name = "3G-Receipts", index = False)
         UDreceipts.to_excel(writer, sheet_name = "Updike-Receipts", index = False)
+    print(f"  → {INV / r'dashboard_essential_files/WH_Receipts_Standard_File.xlsx'}")
 
+    print("\n>>> STEP: Walmart inbound → Walmart_all_shipment.xlsx")
     # --- notebook cell 126 ---
     path =INV / r"us/input/walmart/inbound_receipts"
 
@@ -1198,6 +1262,7 @@ def main():
     walrecep.to_excel(INV / r"dashboard_essential_files/Walmart_all_shipment.xlsx", index = False)
     walrecep.head(2)
 
+    print("\n>>> STEP: upload item_master / container CSVs to Azure")
     # --- notebook cell 129 ---
     def to_snake(name: str) -> str:
         """Convert column name to snake_case format."""
@@ -1297,23 +1362,22 @@ def main():
     upload_to_azure_csv(container_sku, "sanity_data/datahive/inventory/container_tracker.csv",AZURE_CONNECTION_STRING, AZURE_CONTAINER)
     upload_to_azure_csv(container, "sanity_data/datahive/inventory/container_details.csv",AZURE_CONNECTION_STRING, AZURE_CONTAINER)
 
-
+    print("\n>>> STEP: all_helper_files complete")
     return None
 
 
-def run(*, client: str = "ESH", geos=None, **_kwargs):
+def run(*, client: str = CLIENT, geos=None, **_kwargs):
     """Pipeline CLI entrypoint (ESH-only supply-chain script)."""
     del geos
-    if str(client).upper() != "ESH":
-        print(f"[skip] supply_chain script is ESH-only (got client={client})")
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        print(f"[skip] all_helper_files supports {', '.join(sorted(CLIENT_CONFIGS))} only (got client={client})")
         return None
-    return main()
+    return main(client=key)
 
-
-from config_manager.report_helpers import print_script_completed
 
 if __name__ == "__main__":
     main()
-    print_script_completed('all_helper_files')
+    print_script_completed("all_helper_files")
 
 # conversion stats: custom_split removals=4, sku_mapping swaps=5

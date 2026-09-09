@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, X } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { useClients } from '@/hooks/useApi'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/ErrorState'
+import { Modal } from '@/components/ui/Modal'
 import { Panel, PanelHeader } from '@/components/ui/Panel'
 import { useToast } from '@/components/ui/Toast'
 import { api } from '@/services/api'
@@ -46,7 +47,6 @@ export function LogsPage() {
     for (const block of logs.data ?? []) {
       for (const r of block.reports) list.push(r)
     }
-    // Newest run first across clients / reports
     list.sort((a, b) => lastRunIso(b).localeCompare(lastRunIso(a)))
     return list
   }, [logs.data])
@@ -75,20 +75,6 @@ export function LogsPage() {
       setLoadingContent(false)
     }
   }
-
-  useEffect(() => {
-    if (!active) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeModal()
-    }
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.body.style.overflow = prev
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [active])
 
   if (clients.isLoading || logs.isLoading) return <Spinner label="Loading report logs…" />
   if (logs.error) {
@@ -170,39 +156,16 @@ export function LogsPage() {
         )}
       </Panel>
 
-      {active ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="log-viewer-title"
-        >
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/60 backdrop-blur-[1px]"
-            aria-label="Close log viewer"
-            onClick={closeModal}
-          />
-          <div className="relative z-10 flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-2xl shadow-black/40">
-            <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
-              <div className="min-w-0">
-                <h2 id="log-viewer-title" className="text-base font-semibold tracking-tight">
-                  {active.client} · {active.report}
-                </h2>
-                <p className="mt-1 text-sm text-[var(--fg-muted)]">
-                  Last run: {formatLogDateTime(lastRunIso(active))}
-                </p>
-                <p className="mt-1 break-all font-mono text-[11px] text-[var(--fg-muted)]">
-                  {content?.path || active.path}
-                </p>
-              </div>
-              <Button variant="ghost" className="!px-2" onClick={closeModal} title="Close">
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <div className="flex flex-wrap gap-2 border-b border-[var(--border)] px-5 py-3">
-              {active.files.map((f) => (
+      <Modal
+        open={Boolean(active)}
+        onClose={closeModal}
+        labelledBy="log-viewer-title"
+        title={active ? `${active.client} · ${active.report}` : 'Log'}
+        description={active ? `Last run: ${formatLogDateTime(lastRunIso(active))}` : undefined}
+        path={content?.path || active?.path}
+        toolbar={
+          active
+            ? active.files.map((f) => (
                 <Button
                   key={f.name}
                   variant={content?.filename === f.name ? 'primary' : 'ghost'}
@@ -214,36 +177,29 @@ export function LogsPage() {
                     <span className="text-[10px] opacity-80">{formatLogDateTime(f.modified)}</span>
                   </span>
                 </Button>
-              ))}
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-auto p-5">
-              {loadingContent ? (
-                <Spinner label="Reading log…" />
-              ) : content ? (
-                <>
-                  {content.truncated ? (
-                    <p className="mb-2 text-xs text-[var(--color-warn)]">
-                      Truncated preview (file {content.size_bytes} bytes)
-                    </p>
-                  ) : null}
-                  <pre className="max-h-[min(60vh,32rem)] overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
-                    {content.text || '(empty)'}
-                  </pre>
-                </>
-              ) : (
-                <EmptyState title="No log content" />
-              )}
-            </div>
-
-            <div className="flex justify-end border-t border-[var(--border)] px-5 py-3">
-              <Button variant="secondary" onClick={closeModal}>
-                Close
-              </Button>
-            </div>
-          </div>
+              ))
+            : null
+        }
+      >
+        <div className="p-5">
+          {loadingContent ? (
+            <Spinner label="Reading log…" />
+          ) : content ? (
+            <>
+              {content.truncated ? (
+                <p className="mb-2 text-xs text-[var(--color-warn)]">
+                  Truncated preview (file {content.size_bytes} bytes)
+                </p>
+              ) : null}
+              <pre className="max-h-[min(60vh,32rem)] overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+                {content.text || '(empty)'}
+              </pre>
+            </>
+          ) : (
+            <EmptyState title="No log content" />
+          )}
         </div>
-      ) : null}
+      </Modal>
     </div>
   )
 }

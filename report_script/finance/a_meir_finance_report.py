@@ -9,6 +9,14 @@ Covers:
       Output_Database/Closing Stock Analysis/Closing Stock Analyzer-{report}.xlsx
   - Non-interactive (portal): previous calendar month; override MEIR_REPORT_MONTH
 
+Adding a NEW client (paths only — ETL is ESH MEIR-specific today):
+  1. Add client in client.yaml / layouts + inventory root env
+  2. Register in CLIENT_CONFIGS below (inventory_root resolver)
+  3. Adapt resolve_source_paths if folder layout differs
+  4. List the client on this report in report.yaml
+
+Style: step-by-step prints (>>> STEP). Ageing / pivot formulas unchanged.
+
 Run:
     python report_script/finance/a_meir_finance_report.py
     python report_script/finance/a_meir_finance_report.py --month Nov --year 2025
@@ -18,30 +26,64 @@ from __future__ import annotations
 
 import argparse
 import calendar
-import os
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import Callable, Dict, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from dateutil.relativedelta import relativedelta
 
 from pipeline_engine.interactive import env_or_none, safe_input, stdin_is_interactive
-from dateutil.relativedelta import relativedelta
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from config_manager import layouts
 from config_manager import paths as cfg_paths
+from config_manager.report_helpers import print_script_completed
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Client configuration (ESH today — register more when layouts exist)
+# =============================================================================
+
+CLIENT = "ESH"
+
+
+@dataclass(frozen=True)
+class MeirClientConfig:
+    client_code: str
+    client_name: str
+    inventory_root: Path
+
+
+def _esh_config() -> MeirClientConfig:
+    return MeirClientConfig(
+        client_code="ESH",
+        client_name="ESH",
+        inventory_root=cfg_paths.esh_inventory_root(),
+    )
+
+
+CLIENT_CONFIGS: Dict[str, Callable[[], MeirClientConfig]] = {
+    "ESH": _esh_config,
+}
+
+
+def get_client_config(client: str = CLIENT) -> MeirClientConfig:
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"MEIR finance supports {known} only (got '{client}')")
+    return CLIENT_CONFIGS[key]()
+
+
+# =============================================================================
 # Report period + path resolution
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 MONTH_ALIASES = {
     "jan": 1, "january": 1,
@@ -116,8 +158,8 @@ def build_period(report_month: date) -> MeirPeriod:
     )
 
 
-def inventory_root() -> Path:
-    return cfg_paths.esh_inventory_root()
+def inventory_root(client: str = CLIENT) -> Path:
+    return get_client_config(client).inventory_root
 
 
 def resolve_source_paths(period: MeirPeriod, inv: Path) -> dict:
@@ -157,7 +199,6 @@ def resolve_source_paths(period: MeirPeriod, inv: Path) -> dict:
                 return path
         return candidates[0]  # preferred (may be missing; caller validates)
 
-    # Flipkart / EasyEcom: same report-month folder, month-end file
     india_file = pick(
         "flipkart/easyecom",
         [
@@ -165,8 +206,6 @@ def resolve_source_paths(period: MeirPeriod, inv: Path) -> dict:
             india_dir / f"India_Platform_{d_first}.xlsx",
         ],
     )
-    # Preferred: last day of report month in next-month folder (ops rule).
-    # Fallback: 01-next (often how USA platform dumps are named).
     walmart_file = pick(
         "walmart",
         [
@@ -281,9 +320,9 @@ def prompt_report_month(
     return build_period(parse_report_month(raw_m, int(raw_y)))
 
 
-# ---------------------------------------------------------------------------
-# Ageing helpers (same logic as notebook)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Ageing helpers (same logic as notebook — do not change formulas)
+# =============================================================================
 
 def calculate_0_31_days(row):
     total_inventory = row["Total Inventory X India"]
@@ -426,12 +465,20 @@ def _require_file(path: Path, label: str) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Main pipeline (notebook logic)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Main pipeline (notebook logic — ETL unchanged)
+# =============================================================================
 
-def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame:
-    inv = inventory_root()
+def run_meir(
+    period: MeirPeriod,
+    *,
+    dry_run_paths: bool = False,
+    client: str = CLIENT,
+) -> pd.DataFrame:
+    cfg = get_client_config(client)
+    inv = cfg.inventory_root
+
+    print("\n>>> STEP: resolve source paths")
     paths = resolve_source_paths(period, inv)
     print_period_plan(period, paths)
 
@@ -450,7 +497,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     cols = ["Date", "Platform", "SKU", "On_Hand"]
 
     # ----- India: Flipkart + Easy Ecom -----
-    print("\nLoading India platform (Flipkart / Easy Ecom)...")
+    print("\n>>> STEP: load India platform (Flipkart / Easy Ecom)")
     india_path = _require_file(Path(paths["india_platform"]), "india")
     flipkart = pd.read_excel(india_path, sheet_name="Flipkart")
     easyecom = pd.read_excel(india_path, sheet_name="Easy Ecomm")
@@ -458,14 +505,14 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     india_others.reset_index(drop=True, inplace=True)
 
     # ----- Walmart -----
-    print("Loading Walmart...")
+    print("\n>>> STEP: load Walmart")
     Walmart = pd.read_excel(
         _require_file(Path(paths["walmart"]), "walmart"),
         sheet_name="walmart_invntory",
     )
 
     # ----- 3G -----
-    print("Loading 3G...")
+    print("\n>>> STEP: load 3G")
     three_G = pd.read_excel(
         _require_file(Path(paths["three_g"]), "3g"),
         sheet_name="3G-Inventory",
@@ -476,7 +523,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     three_G["On_Hand"] = three_G["3G On Hand"] * three_G["Box / Case"]
 
     # ----- Shipcube -----
-    print("Loading Shipcube...")
+    print("\n>>> STEP: load Shipcube")
     shipcube = pd.read_excel(
         _require_file(Path(paths["shipcube"]), "shipcube"),
         sheet_name="Inventory_S-D",
@@ -504,7 +551,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     shipcube_melted["Date"] = period.last_day_report_str
 
     # ----- Updike -----
-    print("Loading Updike...")
+    print("\n>>> STEP: load Updike")
     updike = pd.read_excel(
         _require_file(Path(paths["updike"]), "updike"),
         sheet_name="Updk-Inveto",
@@ -519,7 +566,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     usa_others = usa_others.drop_duplicates()
 
     # ----- Amazon US / CA -----
-    print("Loading Amazon US / CA...")
+    print("\n>>> STEP: load Amazon US / CA")
     usa = pd.read_excel(_require_file(Path(paths["amazon_us_ca"]), "amazon_us_ca"))
     country_1 = ["USA", "Canada"]
     usa = usa[usa["Country"].isin(country_1)]
@@ -528,7 +575,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     usa.reset_index(drop=True, inplace=True)
 
     # ----- Amazon other geos -----
-    print("Loading Amazon other geos...")
+    print("\n>>> STEP: load Amazon other geos")
     amz_other = pd.read_excel(_require_file(Path(paths["amazon_other"]), "amazon_other"))
     country_2 = ["USA", "Canada"]
     amz_other = amz_other[~amz_other["Country"].isin(country_2)]
@@ -541,7 +588,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     )
 
     # ----- Collate + pivot -----
-    print("Collating MEIR dataframe...")
+    print("\n>>> STEP: collate + pivot MEIR dataframe")
     MEIR_dataframe = pd.concat(
         [india_others, usa_others, shipcube_melted, Amazon_overall]
     )
@@ -566,6 +613,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     MEIR_dataframe = MEIR_dataframe.loc[:, list(PIVOT_COUNTRY_COLS)]
 
     # ----- Save Inventory Reconciles (next-month folder) -----
+    print("\n>>> STEP: save Inventory Reconciles")
     reconciles_dir = (
         inv
         / "Output_Database"
@@ -588,7 +636,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     ).reset_index()
 
     # ----- Container ageing buckets relative to report month -----
-    print("Loading container data...")
+    print("\n>>> STEP: load container + ageing buckets")
     colums_to_read = ["SKU", "QTY in Box", "Month_Year", "Status"]
     container = pd.read_excel(
         _require_file(Path(paths["container"]), "container"),
@@ -636,6 +684,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
         fill_value=0,
     ).reset_index()
 
+    print("\n>>> STEP: Total Inventory X India + day-bucket calc")
     MEIR_dataframe["Total Inventory X India"] = (
         MEIR_dataframe["3G"]
         + MEIR_dataframe["Updike"]
@@ -676,6 +725,7 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     col_position = MEIR_dataframe.columns.get_loc("Total Inventory X India") + 1
     MEIR_dataframe.insert(col_position, "", None)
 
+    print("\n>>> STEP: save Closing Stock Analyzer")
     closing_dir = inv / "Output_Database" / "Closing Stock Analysis"
     closing_dir.mkdir(parents=True, exist_ok=True)
     closing_path = closing_dir / f"Closing Stock Analyzer-{period.report_label}.xlsx"
@@ -684,15 +734,18 @@ def run_meir(period: MeirPeriod, *, dry_run_paths: bool = False) -> pd.DataFrame
     print(f"  → {closing_path}")
     print(f"  rows: {len(MEIR_dataframe):,}")
 
+    print("-" * 70)
+    print(f"Done. Closing Stock Analyzer rows: {len(MEIR_dataframe):,}")
     return MEIR_dataframe
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # CLI / pipeline entry
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ESH MEIR Finance Closing Stock Analyzer")
+    p.add_argument("--client", default=CLIENT, choices=sorted(CLIENT_CONFIGS.keys()))
     p.add_argument("--month", default=None, help="Report month (e.g. Nov, 11, November)")
     p.add_argument("--year", type=int, default=None, help="Report year (e.g. 2025)")
     p.add_argument(
@@ -733,12 +786,12 @@ def resolve_period_from_args(args: argparse.Namespace) -> MeirPeriod:
 def main(argv: Optional[Sequence[str]] = None) -> pd.DataFrame:
     args = parse_args(argv)
     period = resolve_period_from_args(args)
-    return run_meir(period, dry_run_paths=args.dry_run)
+    return run_meir(period, dry_run_paths=args.dry_run, client=args.client)
 
 
 def run(
     *,
-    client: str = "ESH",
+    client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     month: Optional[str] = None,
     year: Optional[int] = None,
@@ -748,10 +801,11 @@ def run(
 ) -> pd.DataFrame:
     """Pipeline CLI entrypoint."""
     del geos
-    print(f"MEIR Finance report (client={client})")
-    print(f"Inventory root: {inventory_root()}")
+    cfg = get_client_config(client)
+    print(f"MEIR Finance report (client={cfg.client_code})")
+    print(f"Inventory root: {cfg.inventory_root}")
 
-    argv = []
+    argv = ["--client", cfg.client_code]
     if report_month:
         argv.extend(["--report-month", str(report_month)])
     else:
@@ -765,13 +819,11 @@ def run(
     # If launched from pipeline with no month, prompt (CLI) or default (portal)
     if not report_month and not month:
         period = prompt_report_month(default_year=year)
-        return run_meir(period, dry_run_paths=dry_run)
+        return run_meir(period, dry_run_paths=dry_run, client=cfg.client_code)
 
     return main(argv)
 
 
-from config_manager.report_helpers import print_script_completed
-
 if __name__ == "__main__":
     main()
-    print_script_completed('a_meir_finance_report')
+    print_script_completed("a_meir_finance_report")

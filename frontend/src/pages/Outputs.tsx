@@ -5,6 +5,7 @@ import { useClients } from '@/hooks/useApi'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/ErrorState'
+import { Modal } from '@/components/ui/Modal'
 import { Panel, PanelHeader } from '@/components/ui/Panel'
 import { useToast } from '@/components/ui/Toast'
 import { api } from '@/services/api'
@@ -116,134 +117,129 @@ export function OutputsPage() {
         )}
       </Panel>
 
-      {selected ? (
-        <Panel>
-          <PanelHeader
-            title={`${selected.client} / ${selected.report}`}
-            description={selected.path}
-            action={
-              <Button variant="ghost" onClick={() => setSelected(null)}>
-                Close
-              </Button>
-            }
-          />
-          {selected.files.length === 0 ? (
-            <EmptyState title="Folder empty or missing" />
-          ) : (
+      <Modal
+        open={Boolean(selected)}
+        onClose={() => {
+          setSelected(null)
+          setPreview(null)
+        }}
+        labelledBy="outputs-files-title"
+        title={selected ? `${selected.client} / ${selected.report}` : 'Files'}
+        path={selected?.path}
+        size="full"
+      >
+        {!selected || selected.files.length === 0 ? (
+          <EmptyState title="Folder empty or missing" />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-left text-sm">
+              <thead className="border-b border-[var(--border)] text-[11px] uppercase text-[var(--fg-muted)]">
+                <tr>
+                  <th className="px-5 py-2">File</th>
+                  <th className="px-5 py-2">Geo</th>
+                  <th className="px-5 py-2">Size</th>
+                  <th className="px-5 py-2">Modified</th>
+                  <th className="px-5 py-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border)]">
+                {selected.files.map((f) => {
+                  const rel = `${selected.rel}/${f.name}`
+                  return (
+                    <tr key={f.name}>
+                      <td className="px-5 py-2 font-mono text-xs">{f.name}</td>
+                      <td className="px-5 py-2 font-mono text-xs">{f.geo ?? '—'}</td>
+                      <td className="px-5 py-2 font-mono text-xs">{formatBytes(f.size_bytes)}</td>
+                      <td className="px-5 py-2 font-mono text-[11px] text-[var(--fg-muted)]">
+                        {f.modified?.slice(0, 19) ?? '—'}
+                      </td>
+                      <td className="px-5 py-2">
+                        <div className="flex gap-2">
+                          <Button
+                            variant="secondary"
+                            onClick={async () => {
+                              try {
+                                setPreview(await api.explorePreview('sanity', rel))
+                              } catch (err) {
+                                toast.push({
+                                  kind: 'error',
+                                  title: 'Preview failed',
+                                  description: err instanceof Error ? err.message : undefined,
+                                })
+                              }
+                            }}
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                            Preview
+                          </Button>
+                          <a href={api.exploreDownloadUrl('sanity', rel)}>
+                            <Button variant="ghost">
+                              <Download className="h-4 w-4" />
+                              Download
+                            </Button>
+                          </a>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(preview)}
+        onClose={() => setPreview(null)}
+        labelledBy="outputs-preview-title"
+        title={preview ? `Preview · ${preview.file.name}` : 'Preview'}
+        path={preview?.path}
+        size="xl"
+      >
+        <div className="p-5">
+          {preview?.preview.note && preview.preview.note !== 'text' ? (
+            <p className="text-sm text-[var(--fg-muted)]">{preview.preview.note}</p>
+          ) : null}
+          {preview?.preview.text ? (
+            <pre className="max-h-[min(60vh,32rem)] overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 font-mono text-xs">
+              {preview.preview.text}
+            </pre>
+          ) : null}
+          {preview?.preview.rows && preview.preview.rows.length > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] text-left text-sm">
-                <thead className="border-b border-[var(--border)] text-[11px] uppercase text-[var(--fg-muted)]">
+              <p className="mb-2 font-mono text-xs text-[var(--fg-muted)]">
+                Showing {preview.preview.rows.length}
+                {preview.preview.row_count != null ? ` of ${preview.preview.row_count}` : ''} rows
+              </p>
+              <table className="w-full min-w-[480px] text-left text-xs">
+                <thead className="border-b border-[var(--border)] text-[var(--fg-muted)]">
                   <tr>
-                    <th className="px-5 py-2">File</th>
-                    <th className="px-5 py-2">Geo</th>
-                    <th className="px-5 py-2">Size</th>
-                    <th className="px-5 py-2">Modified</th>
-                    <th className="px-5 py-2">Actions</th>
+                    {(preview.preview.columns ?? Object.keys(preview.preview.rows[0] ?? {})).map(
+                      (c) => (
+                        <th key={c} className="px-2 py-1 font-mono font-medium">
+                          {c}
+                        </th>
+                      ),
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border)]">
-                  {selected.files.map((f) => {
-                    const rel = `${selected.rel}/${f.name}`
-                    return (
-                      <tr key={f.name}>
-                        <td className="px-5 py-2 font-mono text-xs">{f.name}</td>
-                        <td className="px-5 py-2 font-mono text-xs">{f.geo ?? '—'}</td>
-                        <td className="px-5 py-2 font-mono text-xs">{formatBytes(f.size_bytes)}</td>
-                        <td className="px-5 py-2 font-mono text-[11px] text-[var(--fg-muted)]">
-                          {f.modified?.slice(0, 19) ?? '—'}
+                  {preview.preview.rows.map((row, i) => (
+                    <tr key={i}>
+                      {(preview.preview.columns ?? Object.keys(row)).map((c) => (
+                        <td key={c} className="max-w-[180px] truncate px-2 py-1 font-mono">
+                          {String(row[c] ?? '')}
                         </td>
-                        <td className="px-5 py-2">
-                          <div className="flex gap-2">
-                            <Button
-                              variant="secondary"
-                              onClick={async () => {
-                                try {
-                                  setPreview(await api.explorePreview('sanity', rel))
-                                } catch (err) {
-                                  toast.push({
-                                    kind: 'error',
-                                    title: 'Preview failed',
-                                    description: err instanceof Error ? err.message : undefined,
-                                  })
-                                }
-                              }}
-                            >
-                              <ExternalLink className="h-4 w-4" />
-                              Preview
-                            </Button>
-                            <a href={api.exploreDownloadUrl('sanity', rel)}>
-                              <Button variant="ghost">
-                                <Download className="h-4 w-4" />
-                                Download
-                              </Button>
-                            </a>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
+                      ))}
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
-          )}
-        </Panel>
-      ) : null}
-
-      {preview ? (
-        <Panel>
-          <PanelHeader
-            title={`Preview · ${preview.file.name}`}
-            description={preview.path}
-            action={
-              <Button variant="ghost" onClick={() => setPreview(null)}>
-                Close
-              </Button>
-            }
-          />
-          <div className="p-5">
-            {preview.preview.note && preview.preview.note !== 'text' ? (
-              <p className="text-sm text-[var(--fg-muted)]">{preview.preview.note}</p>
-            ) : null}
-            {preview.preview.text ? (
-              <pre className="max-h-96 overflow-auto rounded-md border border-[var(--border)] bg-[var(--bg)] p-3 font-mono text-xs">
-                {preview.preview.text}
-              </pre>
-            ) : null}
-            {preview.preview.rows && preview.preview.rows.length > 0 ? (
-              <div className="overflow-x-auto">
-                <p className="mb-2 font-mono text-xs text-[var(--fg-muted)]">
-                  Showing {preview.preview.rows.length}
-                  {preview.preview.row_count != null ? ` of ${preview.preview.row_count}` : ''} rows
-                </p>
-                <table className="w-full min-w-[480px] text-left text-xs">
-                  <thead className="border-b border-[var(--border)] text-[var(--fg-muted)]">
-                    <tr>
-                      {(preview.preview.columns ?? Object.keys(preview.preview.rows[0] ?? {})).map(
-                        (c) => (
-                          <th key={c} className="px-2 py-1 font-mono font-medium">
-                            {c}
-                          </th>
-                        ),
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[var(--border)]">
-                    {preview.preview.rows.map((row, i) => (
-                      <tr key={i}>
-                        {(preview.preview.columns ?? Object.keys(row)).map((c) => (
-                          <td key={c} className="max-w-[180px] truncate px-2 py-1 font-mono">
-                            {String(row[c] ?? '')}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-          </div>
-        </Panel>
-      ) : null}
+          ) : null}
+        </div>
+      </Modal>
     </div>
   )
 }

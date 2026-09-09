@@ -1,1 +1,1 @@
-# ESH supply-chain report scripts.
+# Helper files / dated archives / COGS download scripts.

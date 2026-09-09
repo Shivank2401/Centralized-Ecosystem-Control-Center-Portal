@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { ErrorState, Spinner } from '@/components/ui/ErrorState'
+import { Modal } from '@/components/ui/Modal'
 import { Panel, PanelHeader } from '@/components/ui/Panel'
 import { useToast } from '@/components/ui/Toast'
 import { api } from '@/services/api'
@@ -52,6 +53,11 @@ export function ConfigFilesPage() {
       toast.push({ kind: 'error', title: 'Save rejected', description: e instanceof Error ? e.message : undefined }),
   })
 
+  const closeEditor = useCallback(() => {
+    if (dirty && !window.confirm('Discard unsaved changes?')) return
+    setName(null)
+  }, [dirty])
+
   if (files.isLoading) return <Spinner />
   if (files.error) return <ErrorState title="Unable to list config files" onRetry={() => void files.refetch()} />
 
@@ -88,54 +94,54 @@ export function ConfigFilesPage() {
         </div>
       </Panel>
 
-      {name ? (
-        <Panel>
-          <PanelHeader
-            title={name}
-            description={dirty ? 'Unsaved changes' : 'Saved'}
-            action={
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    if (fileQ.data?.content != null) {
-                      setContent(fileQ.data.content)
-                      setDirty(false)
-                    }
-                  }}
-                >
-                  Revert
-                </Button>
-                <Button onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
-                  Save
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    if (dirty && !window.confirm('Discard unsaved changes?')) return
-                    setName(null)
-                  }}
-                >
-                  Close
-                </Button>
-              </div>
-            }
-          />
-          {fileQ.isLoading ? (
-            <Spinner />
-          ) : (
-            <textarea
-              className="min-h-[28rem] w-full border-t border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-xs leading-relaxed"
-              spellCheck={false}
-              value={content}
-              onChange={(e) => {
-                setContent(e.target.value)
-                setDirty(true)
+      <Modal
+        open={Boolean(name)}
+        onClose={closeEditor}
+        closeOnBackdrop={!dirty}
+        labelledBy="config-file-editor-title"
+        title={name ?? 'Config file'}
+        description={dirty ? 'Unsaved changes' : 'Saved'}
+        size="full"
+        headerExtra={
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                if (fileQ.data?.content != null) {
+                  setContent(fileQ.data.content)
+                  setDirty(false)
+                }
               }}
-            />
-          )}
-        </Panel>
-      ) : null}
+            >
+              Revert
+            </Button>
+            <Button onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
+              Save
+            </Button>
+          </div>
+        }
+        footer={
+          <Button variant="secondary" onClick={closeEditor}>
+            Close
+          </Button>
+        }
+      >
+        {fileQ.isLoading ? (
+          <div className="p-5">
+            <Spinner />
+          </div>
+        ) : (
+          <textarea
+            className="min-h-[min(70vh,36rem)] w-full resize-y bg-[var(--bg)] p-4 font-mono text-xs leading-relaxed outline-none"
+            spellCheck={false}
+            value={content}
+            onChange={(e) => {
+              setContent(e.target.value)
+              setDirty(true)
+            }}
+          />
+        )}
+      </Modal>
     </div>
   )
 }

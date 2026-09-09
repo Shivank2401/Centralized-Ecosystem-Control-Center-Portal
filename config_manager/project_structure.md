@@ -69,17 +69,17 @@ Centralized Ecosystem Portal/
 │   │   ├── inventory_database.py
 │   │   ├── new_sku_check.py
 │   │   └── run_logs.py           # ReportRunLog → sanity_data/{CLIENT}/logs/
-│   ├── helper_files_nd_saving/   # Stage: helper files (ex “Supply Chain”)
-│   │   ├── all_helper_files.py / threeG_nd_updike.py
+│   ├── helper_files_nd_saving/   # Stage: helper files (ex “Supply Chain”); >>> STEP + CLIENT_CONFIGS
+│   │   ├── all_helper_files.py / threeG_nd_updike.py  # ESH (CLIENT_CONFIGS); WH standard files
 │   │   ├── saving_raw_file_on_date.py  # ESH + KNC dated archives (notebook-style steps)
-│   │   ├── download_cogs.py
-│   ├── retail/                   # a_kehe / b_sprouts / c_walmart_scintilla + azure_csv_sync
-│   ├── finance/                  # a_meir_finance_report.py (non-interactive month fallback)
+│   │   ├── download_cogs.py            # ESH + KNC Azure → cogs/{client}/
+│   ├── retail/                   # a_kehe / b_sprouts / c_walmart_scintilla + azure_csv_sync (ESH CLIENT_CONFIGS; >>> STEP)
+│   ├── finance/                  # a_meir_finance_report.py (ESH CLIENT_CONFIGS; >>> STEP; month fallback)
 │   ├── want_to_update/           # esh_cogs / knc_cogs / pincode / invalid_skus
 │   ├── utility_codes/            # MySQL import / image names / JSON→CSV
 │   ├── atros_code/               # KNC pnl / ads / decomposition
 │   ├── requirement_specific/     # vector_report / emami_report / SC_inventory
-│   ├── shipping_queue/           # esh_shipping_queue / knc_shipping_queue
+│   ├── shipping_queue/           # esh_shipping_queue / knc_shipping_queue (CLIENT_CONFIGS; >>> STEP)
 │   ├── awd_fees/ / mbr_report/   # packages (register in report.yaml when ready)
 │   └── item_master/              # (if present) Azure item-master CRUD
 │
@@ -347,6 +347,14 @@ On success (no exception):
 Hide: `enabled: false`. Portal **Developer → Add Report** can also register uploads.
 
 **Common sanity reports** (`common_sanity_report/`): each combiner uses `CLIENT_CONFIGS` / overrides — add a new client by registering config (plus yaml/layouts), without changing ETL. Scripts print `>>> STEP` for easier debugging.
+
+**MEIR finance** (`finance/a_meir_finance_report.py`): ESH-only today via `CLIENT_CONFIGS`; same `>>> STEP` style. Ageing / pivot formulas unchanged — new clients need path/layout registration first.
+
+**Helper files** (`helper_files_nd_saving/`): `all_helper_files` + `threeG_nd_updike` are ESH `CLIENT_CONFIGS` (run helpers first); `saving_raw_file_on_date` + `download_cogs` support ESH+KNC. All print `>>> STEP`; ETL unchanged.
+
+**Retail** (`retail/`): KeHE, Sprouts, Walmart Scintilla — ESH `CLIENT_CONFIGS` + `>>> STEP`; shared `azure_csv_sync` for KeHE/Sprouts CSV append. ETL / Azure semantics unchanged.
+
+**Shipping queue** (`shipping_queue/`): separate ESH / KNC scripts with `CLIENT_CONFIGS` + `>>> STEP` + pipeline `run(client=, geos=)`. Clean/discrepancy formulas unchanged.
 
 ---
 

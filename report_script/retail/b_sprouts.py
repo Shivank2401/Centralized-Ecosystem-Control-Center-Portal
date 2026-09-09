@@ -7,6 +7,14 @@ Covers:
   - Azure CSV append (CONTAINER_NAME_ESH / sanity_data/retail/):
       sprout_chain_store, sprout_inventory, sprouts_risk
 
+Adding a NEW client (paths only — transforms are Sprouts/ESH-specific today):
+  1. Add client in client.yaml / layouts + retail root env
+  2. Register in CLIENT_CONFIGS below
+  3. Adapt distributor path layout if needed
+  4. List the client on this report in report.yaml
+
+Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
+
 Run:
     python report_script/retail/b_sprouts.py
     python report_script/retail/b_sprouts.py --skip-azure
@@ -17,9 +25,10 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -40,6 +49,39 @@ SPROUTS_AZURE_BLOBS = {
     "Sprouts_inventory": "sanity_data/retail/sprout_inventory.csv",
     "Sprouts_risk": "sanity_data/retail/sprouts_risk.csv",
 }
+
+
+# =============================================================================
+# Client configuration (ESH today — register more when layouts exist)
+# =============================================================================
+
+CLIENT = "ESH"
+
+
+@dataclass(frozen=True)
+class SproutsClientConfig:
+    client_code: str
+    retail_root: Path
+
+
+def _esh_config() -> SproutsClientConfig:
+    return SproutsClientConfig(
+        client_code="ESH",
+        retail_root=cfg_paths.esh_retail_root(),
+    )
+
+
+CLIENT_CONFIGS: Dict[str, Callable[[], SproutsClientConfig]] = {
+    "ESH": _esh_config,
+}
+
+
+def get_client_config(client: str = CLIENT) -> SproutsClientConfig:
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"Sprouts retail supports {known} only (got '{client}')")
+    return CLIENT_CONFIGS[key]()
 
 
 def _walk_files(folder: Path) -> List[Path]:
@@ -85,12 +127,15 @@ def _month_from_filename(name: str) -> str:
     return parts[len(parts) - 1].split(".")[0]
 
 
-def main(*, skip_azure: bool = False) -> dict:
+def main(*, skip_azure: bool = False, client: str = CLIENT) -> dict:
     """Sprouts processing body (paths from .env; logic unchanged)."""
-    retail = cfg_paths.esh_retail_root()
+    cfg = get_client_config(client)
+    retail = cfg.retail_root
     sprouts = retail / "us/input/distributors/Sprouts"
     archive_year = datetime.now().strftime("%Y")
 
+    print(f"\n>>> STEP: setup dates + UPC helper (client={cfg.client_code})")
+    print(f"  retail root: {retail}")
     datestr = pd.to_datetime("today").strftime("%d-%b-%Y")
     datestr_1 = (pd.to_datetime("today") - timedelta(1)).strftime("%d-%b-%Y")
     datestr_month_C = pd.to_datetime("today").strftime("%b-%Y")
@@ -104,6 +149,7 @@ def main(*, skip_azure: bool = False) -> dict:
 
     upc_helper = _load_upc_helper(retail)
 
+    print("\n>>> STEP: chain store — item qty")
     # --- Chain Store: Item Qty ---
     chain_root = sprouts / "Chain Store"
     qty_archive = chain_root / f"item_quantity(in_eaches)/{archive_year}"
@@ -165,6 +211,7 @@ def main(*, skip_azure: bool = False) -> dict:
         chain_store_qty.Retailer,
     )
 
+    print("\n>>> STEP: chain store — list wholesale")
     # --- Chain Store: List wholesale ---
     wholesale_archive = chain_root / f"item_list_wholesale/{archive_year}"
     wholesale_archive.mkdir(parents=True, exist_ok=True)
@@ -225,6 +272,7 @@ def main(*, skip_azure: bool = False) -> dict:
         list_wholesale.Retailer,
     )
 
+    print("\n>>> STEP: chain store — vendor cost")
     # --- Chain Store: Vendor cost ---
     vendor_archive = chain_root / f"vendor_cost/{archive_year}"
     vendor_archive.mkdir(parents=True, exist_ok=True)
@@ -285,6 +333,7 @@ def main(*, skip_azure: bool = False) -> dict:
         vendor_cost.Retailer,
     )
 
+    print("\n>>> STEP: collate chain store + case cost / markup")
     # --- Collate chain store ---
     Sprouts_Chain_Store = (
         vendor_cost.merge(
@@ -322,6 +371,7 @@ def main(*, skip_azure: bool = False) -> dict:
         - Sprouts_Chain_Store["Ordered_Case_Cost_(Vendor_Cost)"]
     ) / Sprouts_Chain_Store["Ordered_Case_Cost_(Vendor_Cost)"]
 
+    print("\n>>> STEP: inventory + inventory at risk")
     # --- Inventory + inventory at risk ---
     inv_root = sprouts / "Inventory"
     stock_archive = inv_root / "inventory_stock_status"
@@ -347,6 +397,7 @@ def main(*, skip_azure: bool = False) -> dict:
     Sprouts_risk = pd.merge(Sprouts_risk, upc_helper, on="UPC", how="left")
     Sprouts_inventory = pd.merge(Sprouts_inventory, Sprouts_risk, how="outer")
 
+    print("\n>>> STEP: save Sprouts-All.xlsx (dashboard + backup)")
     dashboard_path = retail / "Retail-Dashboard_Files/Sprouts-All.xlsx"
     backup_dir = retail / "us/output/Sprouts/Sprouts Database Files"
     dashboard_path.parent.mkdir(parents=True, exist_ok=True)
@@ -373,6 +424,7 @@ def main(*, skip_azure: bool = False) -> dict:
     print(f"Sprouts dashboard : {dashboard_path}")
     print(f"Sprouts backup    : {backup_path}")
 
+    print("\n>>> STEP: Azure CSV append (Sprouts datasets)")
     azure_frames = {
         "Sprouts_Chain_Store": sheets["Sprout_Chain_Store"],
         "Sprouts_inventory": sheets["SP-Inventory"],
@@ -386,6 +438,7 @@ def main(*, skip_azure: bool = False) -> dict:
         skip_azure=skip_azure,
     )
 
+    print("\n>>> STEP: Sprouts complete")
     return {
         "chain_store": sheets["Sprout_Chain_Store"],
         "inventory": sheets["SP-Inventory"],
@@ -398,19 +451,21 @@ def main(*, skip_azure: bool = False) -> dict:
 
 def run(
     *,
-    client: str = "ESH",
+    client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     skip_azure: bool = False,
     **_kwargs,
 ) -> dict:
     """Pipeline CLI entrypoint: run(client='ESH')."""
     del geos
-    if str(client).upper() != "ESH":
-        print(f"[skip] Sprouts retail script is ESH-only (got client={client})")
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        print(f"[skip] Sprouts retail supports {', '.join(sorted(CLIENT_CONFIGS))} only (got client={client})")
         return {}
-    print(f"Sprouts retail report (client={client})")
-    print(f"Retail root: {cfg_paths.esh_retail_root()}")
-    return main(skip_azure=skip_azure)
+    cfg = get_client_config(key)
+    print(f"Sprouts retail report (client={cfg.client_code})")
+    print(f"Retail root: {cfg.retail_root}")
+    return main(skip_azure=skip_azure, client=key)
 
 
 if __name__ == "__main__":

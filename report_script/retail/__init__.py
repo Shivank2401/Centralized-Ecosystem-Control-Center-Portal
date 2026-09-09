@@ -1,4 +1,5 @@
-# Retail package — KeHE, Sprouts, Walmart / Scintilla (ESH)
+# Retail package — KeHE, Sprouts, Walmart / Scintilla (ESH).
+# Reports use CLIENT_CONFIGS + >>> STEP; shared helpers: drop_duplicates_appended, azure_csv_sync.
 
 from __future__ import annotations
 

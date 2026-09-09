@@ -2,17 +2,28 @@
 ESH Walmart / Scintilla retail sync (inventory, sales, order forecast, store sales).
 
 Covers:
-  - Client: ESH — ESH_WALMART_ROOT Excel sources + sku_helper.csv
+  - Client: ESH — ESH_WALMART_ROOT archive folders + sku_helper.csv
+  - Layer 2: read files under {walmart}/dataset/{YYYY}/{Mon-YYYY}/
+      (current month by default, or all months via prompt / --archive-scope)
+      Files for inventory / sales / order_forecast / store_sales are matched by name
   - Local masters: {walmart}/sanity_report/walmart_scintilla_*.csv
   - Azure parquet replace under CONTAINER_NAME_ESH / sanity_data/retail/ (prompted)
   - Datasets: inventory, sales, order_forecast, store_sales (+ SKU helper hash sync)
 
-No daily Azure download — builds from local CSV history then optional upload.
+Adding a NEW client (paths only — transforms are Walmart/Scintilla-specific today):
+  1. Add client in client.yaml / layouts + walmart root env
+  2. Register in CLIENT_CONFIGS below
+  3. Adapt archive folder layout if needed
+  4. List the client on this report in report.yaml
+
+Style: step-by-step prints (>>> STEP). Local master + Azure sync semantics unchanged.
+No daily Azure download — builds from local archive CSVs then optional upload.
 
 Run:
     python report_script/retail/c_walmart_scintilla.py
+    python report_script/retail/c_walmart_scintilla.py --archive-scope current
+    python report_script/retail/c_walmart_scintilla.py --archive-scope all --skip-azure
     python report_script/retail/c_walmart_scintilla.py --upload-azure
-    python report_script/retail/c_walmart_scintilla.py --skip-azure
 """
 
 from __future__ import annotations
@@ -22,9 +33,10 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Dict, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -38,6 +50,58 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from config_manager import paths as cfg_paths
 from config_manager.report_helpers import print_script_completed
+from pipeline_engine.interactive import env_or_none, safe_input, stdin_is_interactive
+
+
+# Shared dated archives under ESH_WALMART_ROOT:
+#   {walmart}/dataset/{YYYY}/{Mon-YYYY}/   e.g. dataset/2026/Sep-2026
+# Files for all four logical datasets live in the same month folders, e.g.:
+#   Walmart_scintilla_inventory_09-Sep-2026.csv
+#   Walmart_scintilla_sales_09-Sep-2026.csv
+#   Walmart_scintilla_Order_Forecast_09-Sep-2026.csv
+#   Walmart_scintilla_store_sales_09-Sep-2026.csv
+DATASET_ARCHIVE_SUBDIR = "dataset"
+
+# Case-insensitive stem prefixes (match store_sales before sales).
+DATASET_FILE_PREFIXES = {
+    "inventory": "walmart_scintilla_inventory_",
+    "order_forecast": "walmart_scintilla_order_forecast_",
+    "store_sales": "walmart_scintilla_store_sales_",
+    "sales": "walmart_scintilla_sales_",
+}
+
+
+# =============================================================================
+# Client configuration (ESH today — register more when layouts exist)
+# =============================================================================
+
+CLIENT = "ESH"
+
+
+@dataclass(frozen=True)
+class WalmartClientConfig:
+    client_code: str
+    walmart_root: Path
+
+
+def _esh_config() -> WalmartClientConfig:
+    return WalmartClientConfig(
+        client_code="ESH",
+        walmart_root=cfg_paths.esh_walmart_root(),
+    )
+
+
+CLIENT_CONFIGS: Dict[str, Callable[[], WalmartClientConfig]] = {
+    "ESH": _esh_config,
+}
+
+
+def get_client_config(client: str = CLIENT) -> WalmartClientConfig:
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"Walmart Scintilla supports {known} only (got '{client}')")
+    return CLIENT_CONFIGS[key]()
 
 
 def to_snake(name: str) -> str:
@@ -395,6 +459,197 @@ def dedupe_archive_dataframe(df: pd.DataFrame, *, label: str = "archive") -> pd.
     print(f"  [{label}] rows after dedupe  : {after:,}")
     print(f"  [{label}] duplicates removed : {removed:,}")
     return out
+
+
+def dataset_archive_root(walmart_root: Path) -> Path:
+    return Path(walmart_root) / DATASET_ARCHIVE_SUBDIR
+
+
+def current_month_archive_folder(
+    walmart_root: Path,
+    *,
+    archive_year: str,
+    archive_month_label: str,
+) -> Path:
+    """e.g. {walmart}/dataset/2026/Sep-2026"""
+    return dataset_archive_root(walmart_root) / str(archive_year) / str(archive_month_label)
+
+
+def file_matches_dataset(path: Path, dataset_name: str) -> bool:
+    """True if filename matches Walmart_scintilla_{dataset}_* (case-insensitive)."""
+    if dataset_name not in DATASET_FILE_PREFIXES:
+        raise ValueError(f"Unknown dataset_name: {dataset_name}")
+    prefix = DATASET_FILE_PREFIXES[dataset_name]
+    stem = path.stem.lower()
+    # sales must not pick up store_sales
+    if dataset_name == "sales" and stem.startswith(
+        DATASET_FILE_PREFIXES["store_sales"]
+    ):
+        return False
+    return stem.startswith(prefix)
+
+
+def _read_table_file(path: Path) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        return pd.read_csv(path, low_memory=False)
+    if suffix in {".xlsx", ".xls"}:
+        return pd.read_excel(path)
+    raise ValueError(f"Unsupported archive file type: {path.name}")
+
+
+def list_dataset_files(folder: Path, *, dataset_name: str) -> list[Path]:
+    folder = Path(folder)
+    if not folder.exists() or not folder.is_dir():
+        return []
+    paths = []
+    for path in sorted(folder.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in {".csv", ".xlsx", ".xls"}:
+            continue
+        if file_matches_dataset(path, dataset_name):
+            paths.append(path)
+    return paths
+
+
+def read_dataset_files(
+    paths: Sequence[Path],
+    *,
+    dataset_label: str,
+) -> pd.DataFrame:
+    if not paths:
+        raise ValueError(f"No files found for {dataset_label}")
+
+    print(f"  Files found ({len(paths)}):")
+    frames = []
+    for path in paths:
+        print(f"    - {path}")
+        try:
+            frame = _read_table_file(path)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed reading {dataset_label} file {path.name}: {exc}"
+            ) from exc
+        if frame.empty:
+            print(f"      WARN: empty file skipped ({path.name})")
+            continue
+        print(f"      rows={len(frame):,} cols={len(frame.columns)}")
+        frames.append(frame)
+
+    if not frames:
+        raise ValueError(f"All files for {dataset_label} were empty")
+
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    print(f"  Appended rows (before dedupe): {len(combined):,}")
+    return combined
+
+
+def normalize_archive_scope(raw: Optional[str]) -> str:
+    """Return 'current' or 'all'."""
+    key = str(raw or "").strip().lower()
+    if key in {"", "current", "c", "month", "this_month", "this-month"}:
+        return "current"
+    if key in {"all", "a", "all_months", "all-months", "everything"}:
+        return "all"
+    raise ValueError(
+        f"Unknown archive scope {raw!r}. Use 'current' (default) or 'all'."
+    )
+
+
+def resolve_archive_scope(*, archive_scope: Optional[str] = None) -> str:
+    """
+    Decide whether to load current-month archive folders or all months.
+
+    Priority:
+      1) Explicit CLI/run flag
+      2) Env WALMART_ARCHIVE_SCOPE
+      3) Interactive prompt (default: current)
+      4) Non-interactive fallback: current
+    """
+    if archive_scope is not None and str(archive_scope).strip():
+        scope = normalize_archive_scope(archive_scope)
+        print(f"Archive scope: {scope} (explicit flag)")
+        return scope
+
+    env_val = env_or_none("WALMART_ARCHIVE_SCOPE")
+    if env_val:
+        scope = normalize_archive_scope(env_val)
+        print(f"Archive scope: {scope} (WALMART_ARCHIVE_SCOPE)")
+        return scope
+
+    if not stdin_is_interactive():
+        print(
+            "Archive scope: current "
+            "(non-interactive default; set WALMART_ARCHIVE_SCOPE=all or --archive-scope all)"
+        )
+        return "current"
+
+    print()
+    print("=" * 60)
+    print("Walmart Scintilla — archive folder scope")
+    print("  [C]urrent month  — only dataset/{YYYY}/{Mon-YYYY}/ (default)")
+    print("  [A]ll months     — every matching file under dataset/")
+    print("=" * 60)
+    raw = safe_input("Archive scope [C/a]: ", default="c")
+    return normalize_archive_scope(raw)
+
+
+def load_dataset_from_archive_folders(
+    walmart_root: Path,
+    *,
+    dataset_name: str,
+    archive_scope: str,
+    archive_year: str,
+    archive_month_label: str,
+) -> tuple[pd.DataFrame, int]:
+    """
+    Load one dataset from {walmart}/dataset/{YYYY}/{Mon-YYYY}/, then full-row dedupe.
+
+    Returns (deduped_df, rows_before_dedupe).
+    """
+    root = dataset_archive_root(walmart_root)
+    scope = normalize_archive_scope(archive_scope)
+
+    print(f"\n>>> STEP: load {dataset_name} from dataset/ (scope={scope})")
+    print(f"  dataset root: {root}")
+
+    if scope == "current":
+        month_folder = current_month_archive_folder(
+            walmart_root,
+            archive_year=archive_year,
+            archive_month_label=archive_month_label,
+        )
+        print(f"  month folder: {month_folder}")
+        if not month_folder.exists():
+            raise FileNotFoundError(
+                f"{dataset_name}: current-month folder missing: {month_folder}"
+            )
+        paths = list_dataset_files(month_folder, dataset_name=dataset_name)
+        if not paths:
+            raise ValueError(
+                f"{dataset_name}: no matching CSV/Excel in {month_folder}"
+            )
+    else:
+        if not root.exists():
+            raise FileNotFoundError(f"dataset archive root missing: {root}")
+        paths = []
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in {".csv", ".xlsx", ".xls"}:
+                continue
+            if file_matches_dataset(path, dataset_name):
+                paths.append(path)
+        if not paths:
+            raise ValueError(
+                f"{dataset_name}: no matching CSV/Excel under {root}"
+            )
+
+    raw = read_dataset_files(paths, dataset_label=dataset_name)
+    before = len(raw)
+    deduped = dedupe_archive_dataframe(raw, label=f"{dataset_name} archive")
+    return deduped, before
 
 
 def save_and_load_archive_month(
@@ -776,121 +1031,67 @@ def sync_dataframe_to_azure(
     )
 
 
-def main(*, upload_azure: Optional[bool] = None) -> dict:
-    """Walmart Scintilla processing + local CSV masters + optional Azure sync."""
-    WALMART = cfg_paths.esh_walmart_root()
-    
-    archive_year = datetime.now().strftime("%Y")
-    archive_month = datetime.now().strftime("%b")
-    archive_day = datetime.now().strftime("%d")
-    # e.g. 25-Aug-2026 — used in daily archive filenames after each source xlsx is processed
-    archive_date = f"{archive_day}-{archive_month}-{archive_year}"
-    print(f"Archive date stamp: {archive_date}")
+def main(
+    *,
+    upload_azure: Optional[bool] = None,
+    client: str = CLIENT,
+    archive_scope: Optional[str] = None,
+) -> dict:
+    """Walmart Scintilla: archive-folder load + local CSV masters + optional Azure sync."""
+    cfg = get_client_config(client)
+    WALMART = cfg.walmart_root
 
-    # reading sku mapper
+    print(f"\n>>> STEP: setup archive stamps (client={cfg.client_code})")
+    print(f"  walmart root: {WALMART}")
+    archive_year = datetime.now().strftime("%Y")
+    archive_month_label = datetime.now().strftime("%b-%Y")  # e.g. Sep-2026
+    archive_day = datetime.now().strftime("%d")
+    archive_date = f"{archive_day}-{archive_month_label}"
+    print(f"Archive date stamp: {archive_date}")
+    print(f"Current month folder: dataset/{archive_year}/{archive_month_label}")
+
+    scope = resolve_archive_scope(archive_scope=archive_scope)
+
+    print("\n>>> STEP: read sku mapper (for optional Azure SKU sync)")
     print("🪸 Reading sku mapper...🪸")
     Walmart_scintilla_sku = pd.read_csv(WALMART / "retail_team_files" / "sku_helper.csv")
     print(Walmart_scintilla_sku.head())
-    ################################################################################################################################################################
-    ################################################################# *reading inventory* ############################################################################
-    ################################################################################################################################################################
-    print("🦀 Reading inventory...🦀")
-    Walmart_scintilla_inventory = pd.read_excel(WALMART / "eComm Inventory.xlsx")
 
-    print(Walmart_scintilla_inventory.columns)
-    Walmart_scintilla_inventory["report_date"] = (pd.to_datetime(Walmart_scintilla_inventory["report_date"],format="%d-%m-%Y",errors="coerce",).dt.strftime("%Y-%m-%d"))
-    
-    Walmart_scintilla_inventory = pd.merge(Walmart_scintilla_inventory,Walmart_scintilla_sku.loc[:, ["ecomm_upc_number", "WalMart SKU", "EcoSoul SKU"]],
-                                           left_on="ecomm_upc_number",right_on="ecomm_upc_number",how="left")
-    
-    Walmart_scintilla_inventory["year"] = pd.to_datetime(Walmart_scintilla_inventory["report_date"]).dt.strftime("%Y")
-    Walmart_scintilla_inventory["month"] = pd.to_datetime(Walmart_scintilla_inventory["report_date"]).dt.strftime("%b")
-
-    Walmart_scintilla_inventory.columns = [to_snake(col) for col in Walmart_scintilla_inventory.columns]
-    inventory_archive_folder = WALMART / "inventory" / str(archive_year) / str(archive_month)
-    monthly_inventory_df, inventory_archive_before = save_and_load_archive_month(
-        Walmart_scintilla_inventory,
-        archive_folder=inventory_archive_folder,
-        csv_filename=f"Walmart_scintilla_inventory_{archive_date}.csv",
-        dataset_label="inventory",
+    monthly_inventory_df, inventory_archive_before = load_dataset_from_archive_folders(
+        WALMART,
+        dataset_name="inventory",
+        archive_scope=scope,
+        archive_year=archive_year,
+        archive_month_label=archive_month_label,
     )
     print(monthly_inventory_df.head())
 
-    ################################################################################################################################################################
-    ################################################################# *reading sales* #############################################################################
-    ################################################################################################################################################################
-    print("🦀 Reading sales...🦀")
-    Walmart_scintilla_sales = pd.read_excel(WALMART / "eComm_Sales.xlsx")
-
-    Walmart_scintilla_sales["business_date"] = (pd.to_datetime(Walmart_scintilla_sales["business_date"],format="%d-%m-%Y",errors="coerce").dt.strftime("%Y-%m-%d"))
-    Walmart_scintilla_sales = pd.merge(Walmart_scintilla_sales,Walmart_scintilla_sku.loc[:, ["item_number", "WalMart SKU", "EcoSoul SKU"]],
-                                       left_on="walmart_item_number",right_on="item_number",how="left")
-
-    Walmart_scintilla_sales["year"] = pd.to_datetime(Walmart_scintilla_sales["business_date"]).dt.strftime("%Y")
-    Walmart_scintilla_sales["month"] = pd.to_datetime(Walmart_scintilla_sales["business_date"]).dt.strftime("%b")
-
-    Walmart_scintilla_sales.columns = [to_snake(col) for col in Walmart_scintilla_sales.columns]
-    sales_archive_folder = WALMART / "ecom_sales" / str(archive_year) / str(archive_month)
-    monthly_sales_df, sales_archive_before = save_and_load_archive_month(
-        Walmart_scintilla_sales,
-        archive_folder=sales_archive_folder,
-        csv_filename=f"Walmart_scintilla_sales_{archive_date}.csv",
-        dataset_label="sales",
+    monthly_sales_df, sales_archive_before = load_dataset_from_archive_folders(
+        WALMART,
+        dataset_name="sales",
+        archive_scope=scope,
+        archive_year=archive_year,
+        archive_month_label=archive_month_label,
     )
     print(monthly_sales_df.head())
 
-    ################################################################################################################################################################
-    ################################################################# *reading order forecast* ############################################################################
-    ################################################################################################################################################################
- 
-    print("🦀 Reading order forecast...🦀")
-    Walmart_scintilla_Order_Forecast = pd.read_excel(WALMART / "Order Forecast.xlsx")
-
-    Walmart_scintilla_Order_Forecast["sugg_order_dt"] = (pd.to_datetime(Walmart_scintilla_Order_Forecast["sugg_order_dt"],format="%d-%m-%Y",errors="coerce").dt.strftime("%Y-%m-%d"))
-    Walmart_scintilla_Order_Forecast["order_place_dt"] = (pd.to_datetime(Walmart_scintilla_Order_Forecast["order_place_dt"],format="%d-%m-%Y",errors="coerce").dt.strftime("%Y-%m-%d"))
-    Walmart_scintilla_Order_Forecast["sched_arvl_dt"] = (pd.to_datetime(Walmart_scintilla_Order_Forecast["sched_arvl_dt"],format="%d-%m-%Y",errors="coerce").dt.strftime("%Y-%m-%d"))
-
-    Walmart_scintilla_Order_Forecast = pd.merge(Walmart_scintilla_Order_Forecast,Walmart_scintilla_sku.loc[:, ["item_number", "WalMart SKU", "EcoSoul SKU"]],
-                                               left_on="wm_item_nbr",right_on="item_number",how="left")
-    
-    Walmart_scintilla_Order_Forecast["year"] = pd.to_datetime(Walmart_scintilla_Order_Forecast["order_place_dt"]).dt.strftime("%Y")
-    Walmart_scintilla_Order_Forecast["month"] = pd.to_datetime(Walmart_scintilla_Order_Forecast["order_place_dt"]).dt.strftime("%b")
-
-    Walmart_scintilla_Order_Forecast.columns = [to_snake(col) for col in Walmart_scintilla_Order_Forecast.columns]
-    order_forecast_archive_folder = (
-        WALMART / "order_forecast" / str(archive_year) / str(archive_month)
-    )
-    monthly_order_forecast_df, order_forecast_archive_before = save_and_load_archive_month(
-        Walmart_scintilla_Order_Forecast,
-        archive_folder=order_forecast_archive_folder,
-        csv_filename=f"Walmart_scintilla_order_forecast_{archive_date}.csv",
-        dataset_label="order_forecast",
+    monthly_order_forecast_df, order_forecast_archive_before = load_dataset_from_archive_folders(
+        WALMART,
+        dataset_name="order_forecast",
+        archive_scope=scope,
+        archive_year=archive_year,
+        archive_month_label=archive_month_label,
     )
 
-    ################################################################################################################################################################
-    ################################################################# *reading store sales* ############################################################################
-    ################################################################################################################################################################
-    print("🦀 Reading store sales...🦀")
-    Walmart_scintilla_store_sales = pd.read_excel(WALMART / "Store Sales & Inventory.xlsx")
-
-    Walmart_scintilla_store_sales["business_date"] = (pd.to_datetime(Walmart_scintilla_store_sales["business_date"],format="%d-%m-%Y",errors="coerce",).dt.strftime("%Y-%m-%d"))
-    Walmart_scintilla_store_sales = pd.merge(Walmart_scintilla_store_sales,Walmart_scintilla_sku.loc[:, ["item_number", "WalMart SKU", "EcoSoul SKU"]],
-                                             left_on="walmart_item_number",right_on="item_number",how="left",)
-
-    Walmart_scintilla_store_sales["year"] = pd.to_datetime(Walmart_scintilla_store_sales["business_date"]).dt.strftime("%Y")
-    Walmart_scintilla_store_sales["month"] = pd.to_datetime(Walmart_scintilla_store_sales["business_date"]).dt.strftime("%b")
-
-    Walmart_scintilla_store_sales.columns = [to_snake(col) for col in Walmart_scintilla_store_sales.columns]
-    store_sales_archive_folder = (
-        WALMART / "store_sales" / str(archive_year) / str(archive_month)
-    )
-    monthly_store_sales_df, store_sales_archive_before = save_and_load_archive_month(
-        Walmart_scintilla_store_sales,
-        archive_folder=store_sales_archive_folder,
-        csv_filename=f"Walmart_scintilla_store_sales_{archive_date}.csv",
-        dataset_label="store_sales",
+    monthly_store_sales_df, store_sales_archive_before = load_dataset_from_archive_folders(
+        WALMART,
+        dataset_name="store_sales",
+        archive_scope=scope,
+        archive_year=archive_year,
+        archive_month_label=archive_month_label,
     )
 
+    print("\n>>> STEP: build local sanity_report CSV masters")
     # ==========================================================
     # Azure Storage Details (.env) — paths match main script
     # Local history master: {ESH_WALMART_ROOT}/sanity_report/*.csv
@@ -998,6 +1199,7 @@ def main(*, upload_azure: Optional[bool] = None) -> dict:
         print(f"  - {item['local_csv']}  ({rows:,} rows)")
     print("=" * 60)
 
+    print("\n>>> STEP: optional Azure parquet upload")
     do_upload = resolve_azure_upload_choice(upload_azure=upload_azure)
     if do_upload:
         print("Proceeding with Azure parquet replace from local CSV masters...")
@@ -1038,21 +1240,28 @@ def main(*, upload_azure: Optional[bool] = None) -> dict:
     for name, result_df in sync_results.items():
         print(f"  {name:<18} -> {len(result_df):,} rows")
     print("=" * 60)
+    print("\n>>> STEP: Walmart Scintilla complete")
     return sync_results
 
 
 def run(
     *,
-    client: str = "ESH",
+    client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     upload_azure: Optional[bool] = None,
     skip_azure: bool = False,
+    archive_scope: Optional[str] = None,
     **_kwargs,
 ) -> dict:
-    """Pipeline CLI entrypoint: run(client='ESH')."""
+    """Pipeline CLI entrypoint: run(client='ESH', archive_scope='current'|'all')."""
     del geos  # retail Walmart is not geo-split
-    print(f"Walmart Scintilla retail sync (client={client})")
-    print(f"Walmart root: {cfg_paths.esh_walmart_root()}")
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        print(f"[skip] Walmart Scintilla supports {', '.join(sorted(CLIENT_CONFIGS))} only (got client={client})")
+        return {}
+    cfg = get_client_config(key)
+    print(f"Walmart Scintilla retail sync (client={cfg.client_code})")
+    print(f"Walmart root: {cfg.walmart_root}")
 
     choice = upload_azure
     if skip_azure:
@@ -1060,12 +1269,18 @@ def run(
     elif upload_azure is True:
         choice = True
 
-    return main(upload_azure=choice)
+    return main(upload_azure=choice, client=key, archive_scope=archive_scope)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="ESH Walmart / Scintilla retail sync"
+    )
+    parser.add_argument(
+        "--archive-scope",
+        choices=["current", "all"],
+        default=None,
+        help="Load current-month archive folders only (default) or all months under each dataset.",
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
@@ -1086,5 +1301,5 @@ if __name__ == "__main__":
         upload_choice = False
     else:
         upload_choice = None
-    run(upload_azure=upload_choice)
+    run(upload_azure=upload_choice, archive_scope=args.archive_scope)
     print_script_completed("c_walmart_scintilla")

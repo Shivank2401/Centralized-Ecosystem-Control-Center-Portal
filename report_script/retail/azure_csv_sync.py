@@ -6,6 +6,7 @@ Covers:
   - Default blob folder: sanity_data/retail/ (RETAIL_BLOB_PREFIX / WALMART_BLOB_PREFIX)
   - download_existing_csv → concat → hash dedupe → upload overwrite
 
+Style: step-by-step prints (>>> STEP) around sync entrypoints.
 Not a standalone report — imported by a_kehe.py and b_sprouts.py.
 """
 
@@ -203,7 +204,7 @@ def sync_dataframe_to_azure_csv(
     )
 
     print("=" * 60)
-    print(f"Syncing dataset : {name}")
+    print(f">>> STEP: sync Azure CSV — {name}")
     print(f"Blob path       : {container_name}/{blob_path}")
     print(f"New local rows  : {len(new_df):,}")
     print("=" * 60)
@@ -286,6 +287,7 @@ def sync_datasets_to_azure_csv(
         print("[azure] Skipped (--skip-azure / SKIP_AZURE)")
         return {}
 
+    print("\n>>> STEP: batch Azure CSV sync")
     container_name = azure_container()
     prefix = retail_blob_prefix()
     print(f"Azure target: {container_name}/{prefix}/")

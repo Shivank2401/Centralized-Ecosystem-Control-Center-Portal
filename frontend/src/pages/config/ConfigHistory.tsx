@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/ErrorState'
+import { Modal } from '@/components/ui/Modal'
 import { Panel, PanelHeader } from '@/components/ui/Panel'
 import { useToast } from '@/components/ui/Toast'
 import { api } from '@/services/api'
@@ -88,22 +89,18 @@ export function ConfigHistoryPage() {
         )}
       </Panel>
 
-      {selected ? (
-        <Panel>
-          <PanelHeader
-            title={`Diff · ${selected.file}`}
-            description={selected.summary}
-            action={
-              <Button variant="ghost" onClick={() => setSelected(null)}>
-                Close
-              </Button>
-            }
-          />
-          <pre className="max-h-[28rem] overflow-auto border-t border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-xs whitespace-pre-wrap">
-            {selected.diff || '(no diff stored)'}
-          </pre>
-        </Panel>
-      ) : null}
+      <Modal
+        open={Boolean(selected)}
+        onClose={() => setSelected(null)}
+        labelledBy="config-diff-title"
+        title={selected ? `Diff · ${selected.file}` : 'Diff'}
+        description={selected?.summary}
+        size="xl"
+      >
+        <pre className="max-h-[min(70vh,36rem)] overflow-auto bg-[var(--bg)] p-4 font-mono text-xs whitespace-pre-wrap">
+          {selected?.diff || '(no diff stored)'}
+        </pre>
+      </Modal>
     </div>
   )
 }

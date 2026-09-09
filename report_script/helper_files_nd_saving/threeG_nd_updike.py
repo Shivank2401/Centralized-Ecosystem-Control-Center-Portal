@@ -8,6 +8,13 @@ Covers:
              Output_Database/USA/3G/{YYYY}/{Mon-YYYY}/3G_WH_Database_{date}.xlsx
   - Also archives Updike raw inventory CSV and 3G inventory_ageing dated Excel
 
+Adding a NEW client (paths only — transforms are ESH WH-specific today):
+  1. Add client in client.yaml / layouts + inventory/central roots
+  2. Register in CLIENT_CONFIGS below
+  3. Adapt path roots if folder layout differs
+  4. List the client on this report in report.yaml
+
+Style: step-by-step prints (>>> STEP). ETL / notebook formulas unchanged.
 Run after all_helper_files so WH_Orders / WH_Receipts standard files exist.
 
 Run:
@@ -17,7 +24,9 @@ Run:
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Dict, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
@@ -29,16 +38,56 @@ from config_manager.esh_sku_cleaning import (
     mapping_from_convertor_helper,
 )
 from config_manager import paths as cfg_paths
+from config_manager.report_helpers import print_script_completed
 
 
+# =============================================================================
+# Client configuration (ESH today — register more when layouts exist)
+# =============================================================================
+
+CLIENT = "ESH"
 
 
-def main():
+@dataclass(frozen=True)
+class WhClientConfig:
+    client_code: str
+    inventory_root: Path
+    central_root: Path
+    demand_root: Optional[Path]
+
+
+def _esh_config() -> WhClientConfig:
+    return WhClientConfig(
+        client_code="ESH",
+        inventory_root=cfg_paths.esh_inventory_root(),
+        central_root=cfg_paths.esh_central_root(),
+        demand_root=cfg_paths.esh_demand_instock_root(),
+    )
+
+
+CLIENT_CONFIGS: Dict[str, Callable[[], WhClientConfig]] = {
+    "ESH": _esh_config,
+}
+
+
+def get_client_config(client: str = CLIENT) -> WhClientConfig:
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"threeG_nd_updike supports {known} only (got '{client}')")
+    return CLIENT_CONFIGS[key]()
+
+
+def main(client: str = CLIENT):
     """Converted notebook body (processing logic unchanged)."""
+    cfg = get_client_config(client)
     # --- path roots from .env (no hardcoded OneDrive users) ---
-    INV = cfg_paths.esh_inventory_root()
-    CENTRAL = cfg_paths.esh_central_root()
-    DEMAND_ROOT = cfg_paths.esh_demand_instock_root()  # optional
+    INV = cfg.inventory_root
+    CENTRAL = cfg.central_root
+    DEMAND_ROOT = cfg.demand_root  # optional
+
+    print(f"\n>>> STEP: setup dates + country helper (client={cfg.client_code})")
+    print(f"  INV={INV}")
 
     # --- notebook cell 1 ---
     import pandas as pd
@@ -69,6 +118,7 @@ def main():
     convertor_main, convertor_helper, convertor = load_country_helper()
     convertor.head(2)
 
+    print("\n>>> STEP: Updike — archive raw inventory + pivot")
     # --- notebook cell 10 ---
     # New File format
     updike_sellable = pd.read_excel(INV / r"us/input/updike/inventory_balances/WebLink - Item Inventory.xlsx",skipfooter=1)
@@ -130,6 +180,7 @@ def main():
     updike_sellable.info()
     updike_sellable.head()
 
+    print("\n>>> STEP: Updike — open orders + sellable merge")
     # --- notebook cell 16 ---
     orders = pd.read_excel(INV / r"dashboard_essential_files/WH_Orders_Standard_File.xlsx", sheet_name = "Updike-Orders")
 
@@ -217,6 +268,7 @@ def main():
 
     updike_invnto.head()
 
+    print("\n>>> STEP: Updike — receipts discrepancy")
     # --- notebook cell 28 ---
     UDreceipts = pd.read_excel(INV / r"dashboard_essential_files/WH_Receipts_Standard_File.xlsx", sheet_name="Updike-Receipts") 
     UDreceipts.head()
@@ -324,6 +376,7 @@ def main():
                                                 np.where(((Updk_rect["Discrepancy_Box"] == 0) & (Updk_rect["Ship_Status"].isin(error_for))),"Yet to Receive",
                                                          np.where(((Updk_rect["Discrepancy_Box"] == 0) & (Updk_rect["Ship_Status"].isin(error_not_for))),"Others", "Deficit"))))
 
+    print("\n>>> STEP: Updike — outgoing tracker")
     # --- notebook cell 55 ---
     Updk_O1= pd.read_excel(INV / r"dashboard_essential_files/WH_Orders_Standard_File.xlsx",sheet_name = "Updike-Orders")
 
@@ -590,6 +643,7 @@ def main():
 
     updike_invnto["$Reserved"] =  updike_invnto["Updike Comitted"] * updike_invnto["Box / Case"] * updike_invnto["Main_WAC"]
 
+    print("\n>>> STEP: save Updike WH database + dashboard")
     # --- notebook cell 100 ---
     # Saving Updike Database file for New Dashboard
 
@@ -597,6 +651,7 @@ def main():
         Updk_rect.to_excel(writer, sheet_name = "Updike_Rect", index = False)
         Updike_outgoing.to_excel(writer, sheet_name = "Updk-Outgoing", index = False)
         updike_invnto.to_excel(writer, sheet_name = "Updk-Inveto", index = False)
+    print(f"  → {INV / r'IMS_new_Dashboard_files/USA-Updike_WH.xlsx'}")
 
     # --- notebook cell 101 ---
     import os
@@ -622,6 +677,7 @@ def main():
         Updike_outgoing.to_excel(writer, sheet_name = "Updk-Outgoing", index = False)
         updike_invnto.to_excel(writer, sheet_name = "Updk-Inveto", index = False)
 
+    print("\n>>> STEP: 3G — archive stock_status + inventory pivot")
     # --- notebook cell 106 ---
     three_sell = pd.read_excel(INV / r"us/input/3G/stock_status_report/stock_status_report.xlsx", header = 6)
     three_sell.head(2)
@@ -689,6 +745,7 @@ def main():
     outgoing = outgoing.drop(outgoing[outgoing['3G_Status']== "Closed"].index) 
     outgoing
 
+    print("\n>>> STEP: 3G — open orders by channel")
     # --- notebook cell 115 ---
     #For Amazon Order Incoming from 3G____________________________________________________________________________________________________________________________________________________________________________
 
@@ -841,6 +898,7 @@ def main():
     rect = pd.read_excel(INV / r"dashboard_essential_files/WH_Receipts_Standard_File.xlsx",sheet_name="3G-Receipts")
     rect.head()
 
+    print("\n>>> STEP: 3G — receipts discrepancy")
     # --- notebook cell 138 ---
     rect_time= rect.loc[:, ["TID","Reference_No","Creation_3G","Arrival_3G", "Notes"]]
     rect_time = rect_time.drop_duplicates()   
@@ -941,6 +999,7 @@ def main():
                                                 np.where(((ThreeG_rect["Difference_Cases"] > 0) & (ThreeG_rect["Status"] == "Reached")),"Surplus",
                                                          np.where(((ThreeG_rect["Difference_Cases"] < 0) & (ThreeG_rect["Status"] == "Reached")), "Deficit", "Awaited" )))
 
+    print("\n>>> STEP: 3G — outgoing tracker")
     # --- notebook cell 162 ---
     incoming = pd.read_excel(INV / r"dashboard_essential_files/WH_Orders_Standard_File.xlsx",sheet_name="3G-Orders")
 
@@ -1207,6 +1266,7 @@ def main():
     DF_main = DF_main.drop(DF_main[DF_main.SKU== "RS1"].index)
     DF_main.head()
 
+    print("\n>>> STEP: 3G — inventory ageing archive")
     # --- notebook cell 216 ---
     ageing = pd.read_excel(INV / r"us/input/3G/inventory_ageing/inventory_ageing.xlsx",header=8, skipfooter=2)
     ageing.rename(columns = {'Unnamed: 0' : 'SKU','Unnamed: 2' : 'On Hand', 'Unnamed: 3': 'Available', 'Unnamed: 4': 'Allocated'}, inplace = True)
@@ -1255,6 +1315,7 @@ def main():
         ThreeG_invnto.to_excel(writer, sheet_name = "3G-Inventory", index = False)
         ageing.to_excel(writer, sheet_name = "3G-Aging", index = False)
 
+    print("\n>>> STEP: save 3G WH database + dashboard")
     # --- notebook cell 220 ---
     # exporting 3G all Database files for New-Dashboard
 
@@ -1264,6 +1325,7 @@ def main():
         ThreeG_invnto.to_excel(writer, sheet_name = "3G-Inventory", index = False)
         ageing.to_excel(writer, sheet_name = "3G-Aging", index = False)
 
+    print("\n>>> STEP: sanity checklists (sums only)")
     # --- notebook cell 224 ---
     checklist1 = ThreeG_invnto.loc[:,['SKU','3G Fulfillable','Box / Case','3G On Hand', '3G Committed']]
     checklist1['sellable'] = checklist1['Box / Case']  * checklist1['3G Fulfillable']
@@ -1292,23 +1354,22 @@ def main():
     # --- notebook cell 232 ---
     checklist2['Updike Comitted'].sum()
 
-
+    print("\n>>> STEP: threeG_nd_updike complete")
     return None
 
 
-def run(*, client: str = "ESH", geos=None, **_kwargs):
+def run(*, client: str = CLIENT, geos=None, **_kwargs):
     """Pipeline CLI entrypoint (ESH-only supply-chain script)."""
     del geos
-    if str(client).upper() != "ESH":
-        print(f"[skip] supply_chain script is ESH-only (got client={client})")
+    key = str(client).strip().upper()
+    if key not in CLIENT_CONFIGS:
+        print(f"[skip] threeG_nd_updike supports {', '.join(sorted(CLIENT_CONFIGS))} only (got client={client})")
         return None
-    return main()
+    return main(client=key)
 
-
-from config_manager.report_helpers import print_script_completed
 
 if __name__ == "__main__":
     main()
-    print_script_completed('threeG_nd_updike')
+    print_script_completed("threeG_nd_updike")
 
 # conversion stats: custom_split removals=5, sku_mapping swaps=5
