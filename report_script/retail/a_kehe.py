@@ -1,26 +1,17 @@
 """
 ESH KeHE retail combiner (aged inventory, chain store, k-solve, inventory).
 
-Ports the notebook/script into the pipeline:
-  - processing logic preserved
-  - paths from .env via config_manager.paths.esh_retail_root()
-  - CLI entrypoint: run(client='ESH')
-
-Outputs (under ESH retail root):
-  Retail-Dashboard_Files/Kehe-All.xlsx
-  us/output/Kehe/Kehe Database Files/Kehe-All_filestypes_{datestr}.xlsx
-
-Azure CSV append (CONTAINER_NAME_ESH / sanity_data/retail/):
-  kehe_age_inventory.csv
-  kehe_chain_store.csv
-  kehe_ksolve_overall.csv
-  kehe_inventory.csv
+Covers:
+  - Client: ESH — paths via esh_retail_root() / us/input/distributors/kehe
+  - Local Excel: Retail-Dashboard_Files/Kehe-All.xlsx + dated Kehe Database Files
+  - Azure CSV append (CONTAINER_NAME_ESH / sanity_data/retail/):
+      kehe_age_inventory, kehe_chain_store, kehe_ksolve_overall, kehe_inventory
 
 Run:
-  python report_script/retail/a_kehe.py
-  python report_script/retail/a_kehe.py --skip-azure
-  # or via run_pipeline.py → Stage: retail → KeHE
+    python report_script/retail/a_kehe.py
+    python report_script/retail/a_kehe.py --skip-azure
 """
+
 from __future__ import annotations
 
 import argparse

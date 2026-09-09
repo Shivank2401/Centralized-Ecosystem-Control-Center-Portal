@@ -63,7 +63,7 @@ Centralized Ecosystem Portal/
 │   └── __init__.py
 │
 ├── report_script/
-│   ├── common_sanity_report/     # Stage: common (ESH + KNC)
+│   ├── common_sanity_report/     # Stage: common (ESH + KNC); CLIENT_CONFIGS per script
 │   │   ├── manage_fba_report.py / reserved_report.py / ageing_report.py / ledger_report.py
 │   │   ├── orders_report.py      # 3-month Qty/Sales period table before export
 │   │   ├── inventory_database.py
@@ -71,7 +71,8 @@ Centralized Ecosystem Portal/
 │   │   └── run_logs.py           # ReportRunLog → sanity_data/{CLIENT}/logs/
 │   ├── helper_files_nd_saving/   # Stage: helper files (ex “Supply Chain”)
 │   │   ├── all_helper_files.py / threeG_nd_updike.py
-│   │   ├── saving_raw_file_on_date.py / download_cogs.py
+│   │   ├── saving_raw_file_on_date.py  # ESH + KNC dated archives (notebook-style steps)
+│   │   ├── download_cogs.py
 │   ├── retail/                   # a_kehe / b_sprouts / c_walmart_scintilla + azure_csv_sync
 │   ├── finance/                  # a_meir_finance_report.py (non-interactive month fallback)
 │   ├── want_to_update/           # esh_cogs / knc_cogs / pincode / invalid_skus
@@ -178,8 +179,9 @@ Clients → Geographies → multi-stage report order → save (optionally run no
 **3 — Classic run**
 
 ```
-Clients:        1 ESH  2 KNC  3 All
+Clients:        1 ESH  2 KNC  3 EMM  4 All
 Geographies:    1 US … 6 AE  7 All
+# comma-separated multi-select works (e.g. 1,2 or ESH,KNC)
 
 Reports:                          ← stage layer (filtered by selected clients)
 1. Stage: common
@@ -301,6 +303,8 @@ def run(*, client: str, geos: list[str] | None = None, **kwargs):
 
 (`main()` alone also works; executor prefers `run`.)
 
+**Module docstring convention** — each script opens with a short purpose plus a **`Covers:`** block (what clients/geos/sources/outputs it handles) and **`Run:`** examples, same style as `helper_files_nd_saving/saving_raw_file_on_date.py`.
+
 On success (no exception):
 
 - **Portal / CLI via executor:** `print_script_completed("<module_stem>", detail="geo=…")`
@@ -309,7 +313,7 @@ On success (no exception):
 | Folder | Use for |
 |--------|---------|
 | `common_sanity_report/` | Standard Amazon combiners (incl. orders + inventory DB) |
-| `helper_files_nd_saving/` | Helper files, 3G/Updike, raw archive, COGS download |
+| `helper_files_nd_saving/` | Helper files, 3G/Updike, raw archive (ESH + KNC), COGS download |
 | `requirement_specific/` | Built on `sanity_data` (vector, Emami, SC inventory) |
 | `want_to_update/` | COGS upload, pincode, invalid SKUs |
 | `utility_codes/` | Standalone helpers |
@@ -341,6 +345,8 @@ On success (no exception):
 4. Update **this file**
 
 Hide: `enabled: false`. Portal **Developer → Add Report** can also register uploads.
+
+**Common sanity reports** (`common_sanity_report/`): each combiner uses `CLIENT_CONFIGS` / overrides — add a new client by registering config (plus yaml/layouts), without changing ETL. Scripts print `>>> STEP` for easier debugging.
 
 ---
 

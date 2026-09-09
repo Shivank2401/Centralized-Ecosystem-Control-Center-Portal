@@ -1,23 +1,20 @@
-"""Emami UAE multi-channel reporting.
-
-Builds inventory, revenue, marketing, and BuyBox datasets for Amazon Vendor
-Central, Noon, and Noon Minutes from the Emami input tree.
-
-Local masters are always written under ``sanity_data/EMM/{report}/`` (or
-``EMAMI_OUTPUT_ROOT``), then the user is prompted yes/no before Azure CSV sync
-(same pattern as Walmart Scintilla). Use ``--upload-azure`` / ``--skip-azure``
-to skip the prompt.
-
-Required environment:
-    EMAMI_DATA_ROOT
-
-Optional environment:
-    EMAMI_OUTPUT_ROOT          # default: sanity_data/EMM
-    EMAMI_HELPER_FILE
-    PROCESS_YEAR
-    AZURE_STORAGE_CONNECTION_STRING or EMAMI_AZURE_CONNECTION_STRING
-    CONTAINER_NAME_EMAMI (default: thrive-client-emami)
 """
+Emami UAE multi-channel reporting (Amazon Vendor Central, Noon, Noon Minutes).
+
+Covers:
+  - Client: EMM / AE only — EMAMI_DATA_ROOT required
+  - Builds inventory, ads, orders/revenue, buybox, Noon Minutes pricing
+  - Local masters: sanity_data/EMM/{inventory|ads|orders|buy_box|product_pricing}/…
+  - Combined Excel under sanity_data/EMM/emami_report/; optional Azure (thrive-client-emami)
+
+Prompts yes/no before Azure upload unless --upload-azure / --skip-azure.
+
+Run:
+    python report_script/requirement_specific/emami_report.py
+    python report_script/requirement_specific/emami_report.py --year 2026
+    python report_script/requirement_specific/emami_report.py --upload-azure
+"""
+
 from __future__ import annotations
 
 import argparse

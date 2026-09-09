@@ -2,8 +2,8 @@
 # Edited via interactive: Create / manage sequences
 
 sequences:
-  vector_app_updator:
-    label: Vector_App_updator
+  daily_first_run_esh_knc:
+    label: Daily first Run for ESH | KNC
     clients:
     - ESH
     - KNC
@@ -15,27 +15,39 @@ sequences:
     - IN
     - AE
     reports:
+    - all_helper_files
+    - saving_raw_file_on_date
     - ageing
     - ledger
     - manage_fba
     - reserved
     - order
     - inventory_database
+  vector_datahive_updater:
+    label: Vector Datahive Updater
+    clients:
+    - ESH
+    - KNC
+    geos:
+    - US
+    - CA
+    - DE
+    - UK
+    - IN
+    - AE
+    reports:
     - vector_report
-  supply_chain_inventory_update:
-    label: SC Invetory
+  supply_chain_invetory_updater:
+    label: Supply Chain Invetory Updater
     clients:
     - ESH
     geos:
-    - AE
+    - US
     - CA
     - DE
-    - IN
     - UK
-    - US
+    - IN
+    - AE
     reports:
-    - all_helper_files
     - threeG_nd_updike
-    - saving_raw_file_on_date
     - d_inventory_supply_chain
-    enabled: true

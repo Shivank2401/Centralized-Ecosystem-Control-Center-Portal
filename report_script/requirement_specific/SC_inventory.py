@@ -1,16 +1,19 @@
 """
-ESH Inventory Supply Chain (requirement-specific / instock).
+ESH Inventory Supply Chain (instock) — USA platforms + Amazon sanity snapshots.
 
-Combines US warehouse + India + Amazon manage_fba / reserved snapshots.
-SKU cleaning uses ``config_manager.esh_sku_cleaning`` (same as common sanity reports).
-All source roots resolve from ``.env`` (``ESH_DATA_ROOT``, ``ESH_COGS_PATH``, ``SANITY_DATA_ROOT``).
+Covers:
+  - Client: ESH — Shipbob, Walmart, Shipcube/Tradefull, AWD, 3G, Updike
+  - Amazon manage_fba + reserved from sanity_data/ESH for US, CA, DE, AE, UK, IN
+  - USA platform temp xlsx: us/output/USA Platform temp files/{YYYY}/{Mon}/USA_Platform_{T-1}.xlsx
+  - SKU clean via ESH-Item_master / esh_sku_cleaning; paths from .env
 
-All DataFrame columns are normalized to snake_case on read.
+Returns in-memory frames (USA_Platform, manage_fba/reserved by geo); not a full Azure export.
 
 Run:
-  python report_script/requirement_specific/SC_inventory.py
-  python run_pipeline.py  # Stage: requirement_specific → Inventory Supply Chain
+    python report_script/requirement_specific/SC_inventory.py
+    python report_script/requirement_specific/SC_inventory.py --client ESH
 """
+
 from __future__ import annotations
 
 import argparse

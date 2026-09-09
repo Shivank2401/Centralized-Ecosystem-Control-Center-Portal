@@ -1,469 +1,459 @@
 """
-Save raw inventory downloads into dated year/month archive folders.
+Save raw inventory downloads into dated archive folders.
 
 Covers:
-  - USA others : Shipbob, Walmart, Tradefull, AWD
-  - India others: Easy ecom, Flipkart, Amala Earth
-  - Amazon     : manage_fba_inventory + reserved_inventory (all geos)
-  - Amazon     : fba_inventory (ageing) — US/CA T-1, DE/IN/UK/AE T
+  - ESH USA others : Shipbob, Walmart, Tradefull, AWD
+  - ESH India others: Easy ecom, Flipkart, Amala Earth
+  - ESH Amazon     : manage_fba_inventory + reserved_inventory (all geos)
+  - ESH Amazon     : fba_inventory (ageing) — US/CA T-1, DE/IN/UK/AE T
+  - KNC Amazon     : manage_fba + reserved + fba_Inventory (ageing) for UK, DE, AE
 
-No cleaning / ETL — read source file as-is and write a dated CSV snapshot.
+Style: plain step-by-step (like a Jupyter notebook). Each file has a STEP print
+before read/save so a crash shows exactly which block failed.
 
 Run:
-    python c_saving_raw_file_on_date.py
-    python c_saving_raw_file_on_date.py "D:\\path\\to\\inventory"
-
-Optional:
-    set INVENTORY_BASE=C:\\path\\to\\inventory
-    # or ESH_DATA_ROOT in .env
+    python report_script/helper_files_nd_saving/saving_raw_file_on_date.py
+    python report_script/helper_files_nd_saving/saving_raw_file_on_date.py --client ESH
+    python report_script/helper_files_nd_saving/saving_raw_file_on_date.py --client KNC
+    python report_script/helper_files_nd_saving/saving_raw_file_on_date.py --client KNC --geos UK,AE
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-# ---------------------------------------------------------------------------
-# Report registry — relative paths under the inventory root
-# ---------------------------------------------------------------------------
-
-@dataclass
-class RawReport:
-    """One raw source file to archive datewise."""
-
-    name: str
-    # Relative path to the daily download file (under inventory root)
-    source_rel: Path
-    # Relative folder that holds archives (year/month under this)
-    archive_rel: Path
-    # Output filename prefix, e.g. Shipbob_inventory -> Shipbob_inventory_01-Aug-2026.csv
-    output_prefix: str
-    # 0 = today, 1 = yesterday (matches legacy IMS date stamps)
-    date_offset_days: int = 0
-    # Reader: csv | excel
-    file_type: str = "csv"
-    encoding: Optional[str] = None
-    skiprows: int = 0
-    excel_engine: Optional[str] = None
-    # Extra pandas read kwargs if needed later
-    read_kwargs: Dict[str, Any] = field(default_factory=dict)
-    # Archive layout under archive_rel:
-    #   "mon-yyyy"  -> {archive_rel}/{YYYY}/{Mon-YYYY}/prefix_dd-Mon-YYYY.csv  (default)
-    #   "yyyy/mon"  -> {archive_rel}/{YYYY}/{mon}/prefix_dd-Mon-YYYY.csv
-    #                 (FBA ageing legacy: year + lowercase month abbr; folders use file_date)
-    archive_style: str = "mon-yyyy"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 
-# USA others — legacy used yesterday (T-1) stamps
-USA_OTHER_REPORTS: List[RawReport] = [
-    RawReport(
-        name="Shipbob",
-        source_rel=Path("us/input/shipbob/inventory_status/inventory_status.csv"),
-        archive_rel=Path("us/input/shipbob/inventory_status"),
-        output_prefix="Shipbob_inventory",
-        date_offset_days=1,
-        file_type="csv",
-    ),
-    RawReport(
-        name="Walmart",
-        source_rel=Path("us/input/walmart/walmart_inventory/Inventory.xlsx"),
-        archive_rel=Path("us/input/walmart/walmart_inventory"),
-        output_prefix="Walmart_Inventory",
-        date_offset_days=1,
-        file_type="excel",
-    ),
-    RawReport(
-        name="Tradefull",
-        source_rel=Path("us/input/tradefull/InventoryReport/tradefull.xlsx"),
-        archive_rel=Path("us/input/tradefull/InventoryReport"),
-        output_prefix="Tradfull_inventory",
-        date_offset_days=1,
-        file_type="excel",
-    ),
-    RawReport(
-        name="AWD",
-        source_rel=Path("us/input/amazon/awd_inventory_report/AWD-inventory-report.csv"),
-        archive_rel=Path("us/input/amazon/awd_inventory_report"),
-        output_prefix="AWD_inventory",
-        date_offset_days=1,
-        file_type="csv",
-        encoding="latin1",
-        skiprows=3,
-    ),
-]
+# =============================================================================
+# Dates (same idea as notebook: datestr_T / datestr_T1)
+# =============================================================================
 
-# India others — legacy used today stamps
-INDIA_OTHER_REPORTS: List[RawReport] = [
-    RawReport(
-        name="Flipkart",
-        source_rel=Path("india/input/flipkart/my_listing/flipkart_inventory.xls"),
-        archive_rel=Path("india/input/flipkart/my_listing"),
-        output_prefix="Flipkart_inventory",
-        date_offset_days=0,
-        file_type="excel",
-        excel_engine="xlrd",
-    ),
-    RawReport(
-        name="Amala Earth",
-        source_rel=Path("india/input/amala_earth/inventory/amalaearth_inventory.csv"),
-        archive_rel=Path("india/input/amala_earth/inventory"),
-        output_prefix="Amala_Inventory",
-        date_offset_days=0,
-        file_type="csv",
-    ),
-    RawReport(
-        name="Easy ecom",
-        source_rel=Path("india/input/easy_ecom/inventory/easy_inventory.csv"),
-        archive_rel=Path("india/input/easy_ecom/inventory"),
-        output_prefix="Easyecom_inventory",
-        date_offset_days=0,
-        file_type="csv",
-    ),
-]
-
-# Amazon manage FBA + reserved (all geos)
-AMAZON_GEOS: List[Dict[str, Any]] = [
-    {"geo": "us", "manage_offset": 1, "reserved_offset": 1, "encoding": "latin1"},
-    {"geo": "canada", "manage_offset": 1, "reserved_offset": 1, "encoding": "latin1"},
-    {"geo": "germany", "manage_offset": 0, "reserved_offset": 0, "encoding": "utf-8"},
-    {"geo": "uae", "manage_offset": 0, "reserved_offset": 0, "encoding": "utf-8"},
-    {"geo": "uk", "manage_offset": 0, "reserved_offset": 0, "encoding": "utf-8"},
-    {"geo": "india", "manage_offset": 0, "reserved_offset": 0, "encoding": "utf-8"},
-]
+TODAY = datetime.now()
+DATESTR_T = TODAY.strftime("%d-%b-%Y")                    # today
+DATESTR_T1 = (TODAY - timedelta(days=1)).strftime("%d-%b-%Y")  # yesterday
+YEAR = TODAY.strftime("%Y")                               # e.g. 2026
+MON_YYYY = TODAY.strftime("%b-%Y")                        # e.g. Sep-2026
+MON_LOWER = TODAY.strftime("%b").lower()                  # e.g. sep
 
 
-def amazon_reports() -> List[RawReport]:
-    reports: List[RawReport] = []
-    for cfg in AMAZON_GEOS:
-        geo = cfg["geo"]
-        enc = cfg["encoding"]
-        for report_name, offset_key in (
-            ("manage_fba_inventory", "manage_offset"),
-            ("reserved_inventory", "reserved_offset"),
-        ):
-            reports.append(
-                RawReport(
-                    name=f"{geo}/{report_name}",
-                    source_rel=Path(geo)
-                    / "input"
-                    / "amazon"
-                    / report_name
-                    / f"{report_name}.csv",
-                    archive_rel=Path(geo) / "input" / "amazon" / report_name,
-                    output_prefix=report_name,
-                    date_offset_days=int(cfg[offset_key]),
-                    file_type="csv",
-                    encoding=enc,
-                )
-            )
-    return reports
+# =============================================================================
+# Tiny helpers (read / write only — no fancy registry)
+# =============================================================================
 
-
-# Amazon FBA inventory (ageing) — mirrors legacy save_fba_inventory():
-#   archive under {geo}/input/amazon/fba_inventory/{YYYY}/{mon}/fba_inventory_{dd-Mon-YYYY}.csv
-#   US/CA = T-1; DE/IN/UK/AE = T; Canada source filename differs.
-FBA_INVENTORY_GEOS: List[Dict[str, Any]] = [
-    {
-        "geo": "us",
-        "input_filename": "fba_inventory.csv",
-        "date_offset_days": 1,
-        "encoding": "latin1",
-    },
-    {
-        "geo": "canada",
-        "input_filename": "FBA_inventory_aging.csv",
-        "date_offset_days": 1,
-        "encoding": "latin1",
-    },
-    {
-        "geo": "germany",
-        "input_filename": "fba_inventory.csv",
-        "date_offset_days": 0,
-        "encoding": "utf-8",
-    },
-    {
-        "geo": "india",
-        "input_filename": "fba_inventory.csv",
-        "date_offset_days": 0,
-        "encoding": "utf-8",
-    },
-    {
-        "geo": "uk",
-        "input_filename": "fba_inventory.csv",
-        "date_offset_days": 0,
-        "encoding": "utf-8",
-    },
-    {
-        "geo": "uae",
-        "input_filename": "fba_inventory.csv",
-        "date_offset_days": 0,
-        "encoding": "utf-8",
-    },
-]
-
-
-def fba_inventory_reports() -> List[RawReport]:
-    reports: List[RawReport] = []
-    for cfg in FBA_INVENTORY_GEOS:
-        geo = cfg["geo"]
-        filename = cfg["input_filename"]
-        reports.append(
-            RawReport(
-                name=f"{geo}/fba_inventory",
-                source_rel=Path(geo) / "input" / "amazon" / "fba_inventory" / filename,
-                archive_rel=Path(geo) / "input" / "amazon" / "fba_inventory",
-                output_prefix="fba_inventory",
-                date_offset_days=int(cfg["date_offset_days"]),
-                file_type="csv",
-                encoding=cfg.get("encoding"),
-                archive_style="yyyy/mon",
-            )
-        )
-    return reports
-
-
-ALL_REPORTS: List[RawReport] = (
-    USA_OTHER_REPORTS
-    + INDIA_OTHER_REPORTS
-    + amazon_reports()
-    + fba_inventory_reports()
-)
-
-
-# ---------------------------------------------------------------------------
-# Inventory root detection (no hardcoded user path)
-# ---------------------------------------------------------------------------
-
-def _looks_like_inventory_root(path: Path) -> bool:
-    if not path.is_dir():
-        return False
-    return (path / "us" / "input").is_dir() or (path / "canada" / "input").is_dir()
-
-
-def detect_inventory_base(client: Optional[str] = None) -> Path:
-    if client:
+def get_data_root(client: str) -> Path:
+    """Client folder from .env (ESH_DATA_ROOT / KNC_DATA_ROOT)."""
+    client = client.strip().upper()
+    try:
         from config_manager.loader import get_client
+        return get_client(client).data_root.resolve()
+    except Exception:
+        pass
 
-        candidate = get_client(client).data_root
-        if _looks_like_inventory_root(candidate):
-            return candidate.resolve()
-        return candidate.resolve()
-
-    env = os.environ.get("INVENTORY_BASE", "").strip().strip('"')
-    if not env:
-        env = os.environ.get("ESH_DATA_ROOT", "").strip().strip('"')
-    if env:
-        candidate = Path(env).expanduser().resolve()
-        if _looks_like_inventory_root(candidate):
-            return candidate
-        raise FileNotFoundError(
-            f"INVENTORY_BASE/ESH_DATA_ROOT is set but is not a valid inventory root:\n  {candidate}"
-        )
-
-    script_dir = Path(__file__).resolve().parent
-    for parent in [script_dir, *script_dir.parents]:
-        candidate = parent / "inventory"
-        if _looks_like_inventory_root(candidate):
-            return candidate.resolve()
-
-    home = Path.home()
-    search_roots = [
-        home / "OneDrive - EcoSoul Home",
-        home / "OneDrive",
-        home,
-    ]
-    relative_tails = [
-        Path("Central Repository") / "inventory",
-        Path("Data analytics_Ecosoul - Central Repository") / "inventory",
-        Path("inventory"),
-    ]
-
-    for root in search_roots:
-        if not root.is_dir():
-            continue
-        for tail in relative_tails:
-            candidate = root / tail
-            if _looks_like_inventory_root(candidate):
-                return candidate.resolve()
-        try:
-            for path in root.rglob("inventory"):
-                if path.is_dir() and _looks_like_inventory_root(path):
-                    return path.resolve()
-        except (PermissionError, OSError):
-            continue
+    env_map = {
+        "ESH": ["INVENTORY_BASE", "ESH_DATA_ROOT"],
+        "KNC": ["KNC_DATA_ROOT"],
+    }
+    for key in env_map.get(client, []):
+        val = os.environ.get(key, "").strip().strip('"')
+        if val:
+            return Path(val).expanduser().resolve()
 
     raise FileNotFoundError(
-        "Could not locate inventory root.\n"
-        "Set ESH_DATA_ROOT (or INVENTORY_BASE) in .env and re-run."
+        f"Could not find data root for {client}. Set {client}_DATA_ROOT in .env."
     )
 
 
-# ---------------------------------------------------------------------------
-# Read / save helpers
-# ---------------------------------------------------------------------------
-
-def date_stamp(offset_days: int) -> str:
-    return (datetime.now() - timedelta(days=offset_days)).strftime("%d-%b-%Y")
-
-
-def file_date_for(offset_days: int) -> datetime:
-    return datetime.now() - timedelta(days=offset_days)
+def geo_ok(geo: str, geos) -> bool:
+    """True if this geo should run (None / empty / ALL = all geos)."""
+    if not geos:
+        return True
+    wanted = {str(g).strip().upper() for g in geos if str(g).strip()}
+    if not wanted or "ALL" in wanted:
+        return True
+    return geo.upper() in wanted
 
 
-def read_raw_file(path: Path, report: RawReport) -> pd.DataFrame:
+def read_file(path: Path, file_type: str = "csv", encoding=None, skiprows: int = 0, excel_engine=None):
+    """Read csv or excel. Tries a second encoding if csv fails."""
     if not path.is_file():
         raise FileNotFoundError(f"Source missing: {path}")
 
-    try:
-        with open(path, "rb") as handle:
-            handle.read(1)
-    except OSError:
-        pass
+    if file_type == "excel":
+        kwargs = {}
+        if excel_engine:
+            kwargs["engine"] = excel_engine
+        if skiprows:
+            kwargs["skiprows"] = skiprows
+        return pd.read_excel(path, **kwargs)
 
-    kwargs = dict(report.read_kwargs)
+    # csv
+    try_list = []
+    if encoding:
+        try_list.append(encoding)
+    try_list.extend(["utf-8", "latin1"])
 
-    if report.file_type == "csv":
-        encodings: Tuple[str, ...]
-        if report.encoding:
-            encodings = (report.encoding, "utf-8", "latin1")
-        else:
-            encodings = ("utf-8", "latin1")
-
-        last_error: Optional[Exception] = None
-        for enc in encodings:
-            try:
-                return pd.read_csv(
-                    path,
-                    encoding=enc,
-                    skiprows=report.skiprows,
-                    **kwargs,
-                )
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
-        raise RuntimeError(f"Failed to read CSV {path}: {last_error}")
-
-    if report.file_type == "excel":
-        excel_kwargs: Dict[str, Any] = dict(kwargs)
-        if report.excel_engine:
-            excel_kwargs["engine"] = report.excel_engine
-        if report.skiprows:
-            excel_kwargs["skiprows"] = report.skiprows
-        return pd.read_excel(path, **excel_kwargs)
-
-    raise ValueError(f"Unsupported file_type for {report.name}: {report.file_type}")
-
-
-def archive_dir(base: Path, report: RawReport, year: str, month_folder: str) -> Path:
-    return base / report.archive_rel / year / month_folder
-
-
-def resolve_archive_parts(
-    report: RawReport,
-    today: datetime,
-) -> Tuple[str, str, str]:
-    """
-    Return (year, month_folder, stamp) for this report.
-
-    - Default mon-yyyy: year/month from today; stamp from offset (existing behaviour).
-    - yyyy/mon (FBA ageing): year/month/stamp all from file_date (offset).
-    """
-    if report.archive_style == "yyyy/mon":
-        fd = file_date_for(report.date_offset_days)
-        return (
-            fd.strftime("%Y"),
-            fd.strftime("%b").lower(),
-            fd.strftime("%d-%b-%Y"),
-        )
-    return (
-        today.strftime("%Y"),
-        today.strftime("%b-%Y"),
-        date_stamp(report.date_offset_days),
-    )
-
-
-def save_dated_csv(
-    df: pd.DataFrame,
-    dest_dir: Path,
-    output_prefix: str,
-    stamp: str,
-) -> Path:
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    out_path = dest_dir / f"{output_prefix}_{stamp}.csv"
-    df.to_csv(out_path, index=False)
-    return out_path
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def run(
-    inventory_base: Optional[Path] = None,
-    reports: Optional[List[RawReport]] = None,
-    client: Optional[str] = None,
-    geos: Optional[List[str]] = None,
-    **_kwargs,
-) -> List[Path]:
-    """Archive all configured raw reports into YYYY/Mon-YYYY (or FBA yyyy/mon) folders."""
-    del geos  # reserved for future geo-filtered archives
-    if inventory_base is None:
-        inventory_base = detect_inventory_base(client=client or "ESH")
-    base = inventory_base.resolve()
-    today = datetime.now()
-    jobs = reports if reports is not None else ALL_REPORTS
-
-    print(f"Client         : {client or 'ESH'}")
-    print(f"Inventory base : {base}")
-    print(f"Run date       : {today.strftime('%Y-%m-%d')}")
-    print(f"Reports        : {len(jobs)}")
-    print("-" * 60)
-
-    saved: List[Path] = []
-    failed: List[Tuple[str, str]] = []
-
-    for report in jobs:
-        src = base / report.source_rel
-        year, month_folder, stamp = resolve_archive_parts(report, today)
-        dest = archive_dir(base, report, year, month_folder)
+    last_err = None
+    for enc in try_list:
         try:
-            df = read_raw_file(src, report)
-            out = save_dated_csv(df, dest, report.output_prefix, stamp)
-            saved.append(out)
-            print(
-                f"[OK]   {report.name:<28} rows={len(df):>7,}  "
-                f"-> {year}/{month_folder}/{out.name}"
-            )
-        except Exception as exc:  # noqa: BLE001
-            failed.append((report.name, str(exc)))
-            print(f"[FAIL] {report.name:<28} {exc}")
+            return pd.read_csv(path, encoding=enc, skiprows=skiprows)
+        except Exception as err:
+            last_err = err
+    raise RuntimeError(f"Failed to read CSV {path}: {last_err}")
 
-    print("-" * 60)
-    print(f"Saved : {len(saved)}")
-    print(f"Failed: {len(failed)}")
-    if failed:
-        for name, err in failed:
-            print(f"  - {name}: {err}")
-        raise RuntimeError(
-            f"{len(failed)} raw inventory file(s) failed to save. "
-            "Check missing downloads / OneDrive sync."
-        )
+
+def save_dated(df: pd.DataFrame, folder: Path, filename: str) -> Path:
+    """Create folder if needed, write csv, return path."""
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / filename
+    df.to_csv(out, index=False)
+    return out
+
+
+def step_save(
+    step_name: str,
+    src: Path,
+    dest_folder: Path,
+    out_name: str,
+    file_type: str = "csv",
+    encoding=None,
+    skiprows: int = 0,
+    excel_engine=None,
+) -> Path:
+    """
+    One notebook-style cell:
+      print step → read → save → print ok
+    If anything breaks, the traceback points here and step_name is already printed.
+    """
+    print(f"\n>>> STEP: {step_name}")
+    print(f"    read : {src}")
+    print(f"    write: {dest_folder / out_name}")
+
+    df = read_file(src, file_type=file_type, encoding=encoding, skiprows=skiprows, excel_engine=excel_engine)
+    out = save_dated(df, dest_folder, out_name)
+    print(f"    OK   : {len(df):,} rows -> {out.name}")
+    return out
+
+
+# =============================================================================
+# ESH — USA others (T-1 stamp, folder = YEAR / Mon-YYYY)
+# =============================================================================
+
+def save_esh_usa_others(base: Path, geos=None):
+    if not geo_ok("US", geos):
+        return []
+
+    saved = []
+
+    # Shipbob
+    saved.append(step_save(
+        "ESH / US / Shipbob",
+        src=base / "us/input/shipbob/inventory_status/inventory_status.csv",
+        dest_folder=base / "us/input/shipbob/inventory_status" / YEAR / MON_YYYY,
+        out_name=f"Shipbob_inventory_{DATESTR_T1}.csv",
+    ))
+
+    # Walmart
+    saved.append(step_save(
+        "ESH / US / Walmart",
+        src=base / "us/input/walmart/walmart_inventory/Inventory.xlsx",
+        dest_folder=base / "us/input/walmart/walmart_inventory" / YEAR / MON_YYYY,
+        out_name=f"Walmart_Inventory_{DATESTR_T1}.csv",
+        file_type="excel",
+    ))
+
+    # Tradefull
+    saved.append(step_save(
+        "ESH / US / Tradefull",
+        src=base / "us/input/tradefull/InventoryReport/tradefull.xlsx",
+        dest_folder=base / "us/input/tradefull/InventoryReport" / YEAR / MON_YYYY,
+        out_name=f"Tradfull_inventory_{DATESTR_T1}.csv",
+        file_type="excel",
+    ))
+
+    # AWD
+    saved.append(step_save(
+        "ESH / US / AWD",
+        src=base / "us/input/amazon/awd_inventory_report/AWD-inventory-report.csv",
+        dest_folder=base / "us/input/amazon/awd_inventory_report" / YEAR / MON_YYYY,
+        out_name=f"AWD_inventory_{DATESTR_T1}.csv",
+        encoding="latin1",
+        skiprows=3,
+    ))
+
     return saved
 
 
-def run_main(inventory_base: Optional[Path] = None) -> List[Path]:
-    """Entrypoint used by main_ecosoul.py orchestrator."""
-    return run(inventory_base=inventory_base)
+# =============================================================================
+# ESH — India others (T stamp)
+# =============================================================================
+
+def save_esh_india_others(base: Path, geos=None):
+    if not geo_ok("IN", geos):
+        return []
+
+    saved = []
+
+    saved.append(step_save(
+        "ESH / IN / Flipkart",
+        src=base / "india/input/flipkart/my_listing/flipkart_inventory.xls",
+        dest_folder=base / "india/input/flipkart/my_listing" / YEAR / MON_YYYY,
+        out_name=f"Flipkart_inventory_{DATESTR_T}.csv",
+        file_type="excel",
+        excel_engine="xlrd",
+    ))
+
+    saved.append(step_save(
+        "ESH / IN / Amala Earth",
+        src=base / "india/input/amala_earth/inventory/amalaearth_inventory.csv",
+        dest_folder=base / "india/input/amala_earth/inventory" / YEAR / MON_YYYY,
+        out_name=f"Amala_Inventory_{DATESTR_T}.csv",
+    ))
+
+    saved.append(step_save(
+        "ESH / IN / Easy ecom",
+        src=base / "india/input/easy_ecom/inventory/easy_inventory.csv",
+        dest_folder=base / "india/input/easy_ecom/inventory" / YEAR / MON_YYYY,
+        out_name=f"Easyecom_inventory_{DATESTR_T}.csv",
+    ))
+
+    return saved
+
+
+# =============================================================================
+# ESH — Amazon manage_fba + reserved
+#   US/CA = T-1 + latin1 ; DE/AE/UK/IN = T + utf-8
+# =============================================================================
+
+def save_esh_amazon_manage_reserved(base: Path, geos=None):
+    # (folder_name, geo_code, stamp, encoding)
+    rows = [
+        ("us", "US", DATESTR_T1, "latin1"),
+        ("canada", "CA", DATESTR_T1, "latin1"),
+        ("germany", "DE", DATESTR_T, "utf-8"),
+        ("uae", "AE", DATESTR_T, "utf-8"),
+        ("uk", "UK", DATESTR_T, "utf-8"),
+        ("india", "IN", DATESTR_T, "utf-8"),
+    ]
+
+    saved = []
+    for folder, code, stamp, enc in rows:
+        if not geo_ok(code, geos):
+            continue
+
+        for report_name in ("manage_fba_inventory", "reserved_inventory"):
+            src = base / folder / "input" / "amazon" / report_name / f"{report_name}.csv"
+            dest = base / folder / "input" / "amazon" / report_name / YEAR / MON_YYYY
+            saved.append(step_save(
+                f"ESH / {code} / {report_name}",
+                src=src,
+                dest_folder=dest,
+                out_name=f"{report_name}_{stamp}.csv",
+                encoding=enc,
+            ))
+    return saved
+
+
+# =============================================================================
+# ESH — Amazon fba_inventory (ageing)
+#   archive = YEAR / mon   (e.g. 2026/sep)
+#   US/CA = T-1 ; others = T
+# =============================================================================
+
+def save_esh_fba_inventory(base: Path, geos=None):
+    # (folder, geo, source_filename, stamp, encoding)
+    rows = [
+        ("us", "US", "fba_inventory.csv", DATESTR_T1, "latin1"),
+        ("canada", "CA", "FBA_inventory_aging.csv", DATESTR_T1, "latin1"),
+        ("germany", "DE", "fba_inventory.csv", DATESTR_T, "utf-8"),
+        ("india", "IN", "fba_inventory.csv", DATESTR_T, "utf-8"),
+        ("uk", "UK", "fba_inventory.csv", DATESTR_T, "utf-8"),
+        ("uae", "AE", "fba_inventory.csv", DATESTR_T, "utf-8"),
+    ]
+
+    saved = []
+    for folder, code, filename, stamp, enc in rows:
+        if not geo_ok(code, geos):
+            continue
+
+        # month folder from the stamp date (T or T-1)
+        file_dt = TODAY if stamp == DATESTR_T else (TODAY - timedelta(days=1))
+        year = file_dt.strftime("%Y")
+        mon = file_dt.strftime("%b").lower()
+
+        src = base / folder / "input" / "amazon" / "fba_inventory" / filename
+        dest = base / folder / "input" / "amazon" / "fba_inventory" / year / mon
+        saved.append(step_save(
+            f"ESH / {code} / fba_inventory",
+            src=src,
+            dest_folder=dest,
+            out_name=f"fba_inventory_{stamp}.csv",
+            encoding=enc,
+        ))
+    return saved
+
+
+def run_esh(base: Path, geos=None):
+    print("=" * 60)
+    print("CLIENT: ESH")
+    print(f"BASE  : {base}")
+    print("=" * 60)
+
+    saved = []
+    saved += save_esh_usa_others(base, geos)
+    saved += save_esh_india_others(base, geos)
+    saved += save_esh_amazon_manage_reserved(base, geos)
+    saved += save_esh_fba_inventory(base, geos)
+    return saved
+
+
+# =============================================================================
+# KNC — Amazon manage_fba + reserved + fba_Inventory
+#   UK : Inventory/...          archive YEAR/mon
+#   DE : Germany/Inventory/...  archive YEAR only
+#   AE : UAE/Inventory/...      archive YEAR only
+#   stamp = today (T)
+# =============================================================================
+
+def run_knc(base: Path, geos=None):
+    print("=" * 60)
+    print("CLIENT: KNC")
+    print(f"BASE  : {base}")
+    print("=" * 60)
+
+    saved = []
+
+    # ---- UK (year / mon) ----------------------------------------------------
+    if geo_ok("UK", geos):
+        inv = base / "Inventory"
+
+        # manage fba
+        saved.append(step_save(
+            "KNC / UK / manage_fba_inventory",
+            src=inv / "manage_fba_inventory.csv",
+            dest_folder=inv / "manage fba" / YEAR / MON_LOWER,
+            out_name=f"manage_fba_inventory_{DATESTR_T}.csv",
+        ))
+        # reserved
+        saved.append(step_save(
+            "KNC / UK / reserved_inventory",
+            src=inv / "reserved_inventory.csv",
+            dest_folder=inv / "reserved" / YEAR / MON_LOWER,
+            out_name=f"reserved_inventory_{DATESTR_T}.csv",
+        ))
+        # ageing
+        saved.append(step_save(
+            "KNC / UK / fba_Inventory",
+            src=inv / "fba_Inventory.csv",
+            dest_folder=inv / "fba Inventory" / YEAR / MON_LOWER,
+            out_name=f"fba_Inventory_{DATESTR_T}.csv",
+        ))
+
+    # ---- DE (year only) -----------------------------------------------------
+    if geo_ok("DE", geos):
+        inv = base / "Germany" / "Inventory"
+
+        saved.append(step_save(
+            "KNC / DE / manage_fba_inventory",
+            src=inv / "manage_fba_inventory.csv",
+            dest_folder=inv / "manage fba" / YEAR,
+            out_name=f"manage_fba_inventory_{DATESTR_T}.csv",
+        ))
+        saved.append(step_save(
+            "KNC / DE / reserved_inventory",
+            src=inv / "reserved_inventory.csv",
+            dest_folder=inv / "reserved" / YEAR,
+            out_name=f"reserved_inventory_{DATESTR_T}.csv",
+        ))
+        saved.append(step_save(
+            "KNC / DE / fba_Inventory",
+            src=inv / "fba_Inventory.csv",
+            dest_folder=inv / "fba Inventory" / YEAR,
+            out_name=f"fba_Inventory_{DATESTR_T}.csv",
+        ))
+
+    # ---- AE (year only) -----------------------------------------------------
+    if geo_ok("AE", geos):
+        inv = base / "UAE" / "Inventory"
+
+        saved.append(step_save(
+            "KNC / AE / manage_fba_inventory",
+            src=inv / "manage_fba_inventory.csv",
+            dest_folder=inv / "manage fba" / YEAR,
+            out_name=f"manage_fba_inventory_{DATESTR_T}.csv",
+        ))
+        saved.append(step_save(
+            "KNC / AE / reserved_inventory",
+            src=inv / "reserved_inventory.csv",
+            dest_folder=inv / "reserved" / YEAR,
+            out_name=f"reserved_inventory_{DATESTR_T}.csv",
+        ))
+        saved.append(step_save(
+            "KNC / AE / fba_Inventory",
+            src=inv / "fba_Inventory.csv",
+            dest_folder=inv / "fba Inventory" / YEAR,
+            out_name=f"fba_Inventory_{DATESTR_T}.csv",
+        ))
+
+    return saved
+
+
+# =============================================================================
+# Entry points (portal / CLI) — same API as before
+# =============================================================================
+
+def run(client=None, geos=None, inventory_base=None, **_kwargs):
+    """
+    Pipeline / portal entry.
+    client = ESH | KNC
+    geos   = optional list like ["UK", "AE"]
+    """
+    client_code = str(client or "ESH").strip().upper()
+    base = Path(inventory_base).resolve() if inventory_base else get_data_root(client_code)
+
+    print(f"Run date : {TODAY.strftime('%Y-%m-%d')}")
+    print(f"T stamp  : {DATESTR_T}")
+    print(f"T-1 stamp: {DATESTR_T1}")
+    if geos:
+        print(f"Geos     : {list(geos)}")
+
+    if client_code == "ESH":
+        saved = run_esh(base, geos)
+    elif client_code == "KNC":
+        saved = run_knc(base, geos)
+    else:
+        raise ValueError(f"Unknown client '{client_code}'. Use ESH or KNC.")
+
+    print("\n" + "-" * 60)
+    print(f"Done. Saved {len(saved)} file(s).")
+    return saved
+
+
+def run_main(inventory_base=None, *, client="ESH", geos=None):
+    return run(client=client, geos=geos, inventory_base=inventory_base)
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Archive raw inventory files with date stamp.")
+    parser.add_argument("inventory_base", nargs="?", default=None, help="Optional data-root override")
+    parser.add_argument("--client", default="ESH", help="ESH or KNC")
+    parser.add_argument("--geos", default=None, help="Comma-separated geos, e.g. UK,AE")
+    return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
     from config_manager.report_helpers import print_script_completed
 
-    cli_base = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else None
-    run_main(inventory_base=cli_base)
-    print_script_completed("saving_raw_file_on_date")
+    args = parse_args()
+    geos = [g.strip() for g in args.geos.split(",") if g.strip()] if args.geos else None
+    base = Path(args.inventory_base).expanduser() if args.inventory_base else None
+    run_main(inventory_base=base, client=args.client, geos=geos)
+    print_script_completed("saving_raw_file_on_date", detail=f"client={args.client}")

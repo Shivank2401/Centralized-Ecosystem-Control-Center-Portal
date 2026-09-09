@@ -1,18 +1,25 @@
 """
 Client-aware Amazon Orders combiner (ESH + KNC).
 
-Shared pipeline:
-  load year folders → filter sales-channel → SKU clean (esh/knc) →
-  pivot → dates → city/state via orders_pincode → monthly AOV →
-  new-SKU alert vs COGS → 3-month qty/sales checklist (client × geo).
+Covers:
+  - Clients: ESH + KNC (geos from client.yaml / --geos)
+  - Pipeline: year folders → sales-channel filter → SKU clean → pivot → pincode city/state → AOV
+  - Outputs: sanity_data/{CLIENT}/orders/{GEO}_orders_database.parquet|.csv
+  - ASHU line-level: sanity_data/{CLIENT}/orders_ASHU/{GEO}_orders_ASHU.csv (keeps promotion_ids)
+  - New-SKU vs COGS + 3-month qty/sales checklist (GEO × months) before export
 
-Outputs (per client):
-  sanity_data/{CLIENT}/orders/{GEO}_orders.parquet (+ .csv)
+Adding a NEW client (no ETL changes needed):
+  1. Add client + geos in client.yaml / geography.yaml / layouts.py
+     (orders roots via layouts.*_orders_geo_roots / knc_geo_roots("orders"))
+  2. Add one `_xxx_config()` below and register it in CLIENT_CONFIGS
+  3. List the client on this report in report.yaml
 
-Run examples:
-  python report_script/common_sanity_report/orders_report.py
-  python report_script/common_sanity_report/orders_report.py --client ESH --geos US,UK
-  python report_script/common_sanity_report/orders_report.py --client KNC --years 2026
+Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
+
+Run:
+    python report_script/common_sanity_report/orders_report.py
+    python report_script/common_sanity_report/orders_report.py --client ESH --geos US,UK
+    python report_script/common_sanity_report/orders_report.py --client KNC --years 2026
 """
 
 from __future__ import annotations
@@ -49,11 +56,11 @@ from report_script.common_sanity_report.run_logs import (
     ReportRunLog,
 )
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Run knobs
-# ---------------------------------------------------------------------------
+# =============================================================================
 
-CLIENT: str = "ESH"
+CLIENT: str = "ESH" | "KNC" # "ESH" | "KNC"
 PROCESS_GEOS: Optional[List[str]] = None
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
 PROCESS_YEARS: Optional[List[str]] = ["2023", "2024", "2025", "2026"]
@@ -138,9 +145,11 @@ ASHU_FOLDER = "orders_ASHU"
 ASHU_NAME_SUFFIX = "orders_ASHU"
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Client configuration
-# ---------------------------------------------------------------------------
+#   New client = copy a builder + register in CLIENT_CONFIGS.
+#   Fill geo_roots (ESH revenue roots or KNC orders roots) + sales_channels/currencies.
+# =============================================================================
 
 @dataclass
 class ClientOrdersConfig:
@@ -208,6 +217,7 @@ def _knc_config() -> ClientOrdersConfig:
     )
 
 
+# Register clients here — only place to touch for a new client in this script.
 CLIENT_CONFIGS: Dict[str, Callable[[], ClientOrdersConfig]] = {
     "ESH": _esh_config,
     "KNC": _knc_config,
@@ -217,7 +227,8 @@ CLIENT_CONFIGS: Dict[str, Callable[[], ClientOrdersConfig]] = {
 def get_client_config(client: str) -> ClientOrdersConfig:
     key = str(client).strip().upper()
     if key not in CLIENT_CONFIGS:
-        raise ValueError(f"Unknown client '{client}'. Expected one of: {list(CLIENT_CONFIGS)}")
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"Unknown client '{client}'. Expected one of: {known}")
     return CLIENT_CONFIGS[key]()
 
 
@@ -896,12 +907,12 @@ def transform_orders(
 
     for geography, geo_df in raw_df.groupby("geography", sort=True):
         code = str(geography).strip().upper()
-        print(f"\n=== Transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows) ===")
+        print(f"\n>>> STEP: transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows)")
         try:
             sku_mapping = load_client_sku_mapping(cfg, code)
             print("FBA19D7Y7F67:", sku_mapping.get("FBA19D7Y7F67"))
             print("FBA18VLXSWJF:", sku_mapping.get("FBA18VLXSWJF"))
-            
+
             cleaned, ashu_df = transform_geography_orders(
                 geo_df, cfg=cfg, geography_code=code, sku_mapping=sku_mapping
             )
@@ -936,7 +947,7 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\nSaving per-geography orders outputs to: {output_dir}")
+    print(f"\n>>> STEP: save per-geography orders → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
@@ -962,7 +973,7 @@ def save_ashu_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\nSaving ASHU line-level orders (promotion_ids) to: {output_dir}")
+    print(f"\n>>> STEP: save ASHU line-level orders → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         csv_path = output_dir / f"{geo_name}_{name_suffix}.csv"
@@ -1011,8 +1022,10 @@ def build_orders_dataframe(
     processed_files: Set[Path] = set()
     stats = LoadStats()
 
+    print("\n>>> STEP: load raw order files")
     for geo_code, orders_root in resolve_geo_targets(cfg, geos):
         stats.geographies.add(geo_code)
+        print(f"  geo root [{geo_code}]: {orders_root}")
         for year_path in discover_year_folders(orders_root, years=years):
             year = year_path.name
             stats.year_folders.add(f"{geo_code}/{year}")
@@ -1049,22 +1062,24 @@ def build_orders_dataframe(
                 run_log.append(line)
 
         if apply_transform and not raw_df.empty:
-            print("\nApplying orders transform (channel filter + SKU clean + pincode + pivot)...")
+            print("\n>>> STEP: transform (channel filter + SKU clean + pincode + pivot)")
             new_df, ashu_df = transform_orders(raw_df, cfg=cfg)
             print(f"Transformed new slice shape: {new_df.shape}")
             print(f"ASHU line-level shape: {ashu_df.shape}")
-            print("\nResolving duplicate order items (cancelled override + status rules)...")
+            print("\n>>> STEP: resolve duplicate order items (status rules)")
             new_df = resolve_orders_duplicates(new_df)
         else:
             new_df = raw_df
 
         if merge_existing:
+            print("\n>>> STEP: merge with existing parquet masters")
             existing_df = load_existing_parquet_outputs(out_dir, name_suffix=PARQUET_NAME_SUFFIX)
             master_df = merge_orders_with_existing(existing_df, new_df)
         else:
             master_df = resolve_orders_duplicates(new_df) if apply_transform else new_df
 
         if not master_df.empty:
+            print("\n>>> STEP: new SKU check")
             check_final_dataframe_new_skus(
                 master_df,
                 client=cfg.client_code,
@@ -1073,7 +1088,7 @@ def build_orders_dataframe(
             )
 
         if apply_transform and not master_df.empty:
-            # Tabular period summary immediately before final export.
+            print("\n>>> STEP: 3-month qty/sales checklist")
             period_text = print_period_summary_tables(master_df)
             run_log.blank()
             run_log.append(period_text)
@@ -1086,6 +1101,8 @@ def build_orders_dataframe(
     finally:
         run_log.flush()
 
+    print("-" * 60)
+    print(f"Done. Master shape: {master_df.shape}")
     return master_df, failed_files, stats
 
 
@@ -1146,4 +1163,4 @@ def run(
 
 if __name__ == "__main__":
     run_main()
-    print_script_completed('orders_report')
+    print_script_completed("orders_report")

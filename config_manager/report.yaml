@@ -133,11 +133,12 @@ reports:
     menu_order: 2
     enabled: true
   saving_raw_file_on_date:
-    label: Saving raw file on date (ESH supply_chain)
+    label: Saving raw file on date (client archives)
     stage: Supply Chain
     module: report_script.helper_files_nd_saving.saving_raw_file_on_date
     clients:
     - ESH
+    - KNC
     menu_order: 3
     enabled: true
   download_cogs:

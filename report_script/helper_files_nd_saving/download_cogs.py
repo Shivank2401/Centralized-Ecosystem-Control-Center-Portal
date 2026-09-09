@@ -1,23 +1,20 @@
 """
 Download latest client COGS slices from Azure into the project folder.
 
-Destination:
-  {project_root}/cogs/{client}/  e.g. cogs/esh/, cogs/knc/
+Covers:
+  - Clients: ESH + KNC (or --client ALL)
+  - Azure (app-helper): thrive-client-ecosoulhome|kinetica/cogs/*.parquet|.csv
+  - Local dest: {project_root}/cogs/{client}/  e.g. cogs/esh/, cogs/knc/
+  - Optional --geos filter (e.g. UK,US,DE)
 
-Azure source (container app-helper unless overridden):
-  ESH -> thrive-client-ecosoulhome/cogs/*.parquet|.csv
-  KNC -> thrive-client-kinetica/cogs/*.parquet|.csv
-
-Upload / refresh Azure from Excel via want_to_update:
-  report_script/want_to_update/esh_cogs.py
-  report_script/want_to_update/knc_cogs.py
+Upload/refresh Azure from Excel via want_to_update/esh_cogs.py and knc_cogs.py.
 
 Run:
-  python report_script/supply_chain/d_download_cogs.py
-  python report_script/supply_chain/d_download_cogs.py --client ESH
-  python report_script/supply_chain/d_download_cogs.py --client KNC --geos UK,DE
-  # or via run_pipeline.py -> Stage: supply_chain -> Download COGS
+    python report_script/helper_files_nd_saving/download_cogs.py
+    python report_script/helper_files_nd_saving/download_cogs.py --client ESH
+    python report_script/helper_files_nd_saving/download_cogs.py --client KNC --geos UK,DE
 """
+
 from __future__ import annotations
 
 import argparse

@@ -1,4 +1,21 @@
-"""Pipeline-ready KNC P&L report for UK, Germany, and UAE."""
+"""
+KNC Amazon P&L (transactions + ad spend + COGS → CM1/CM2/CM3).
+
+Covers:
+  - Client: KNC only (UK, DE, AE)
+  - Inputs: Settlement/transaction CSVs (DE translated), Bulk Operations Spend, COGS sheets
+  - Outputs: sanity_data/KNC/pnl/{GEO}_pnl.parquet|.csv + final_pnl.*
+  - Optional Azure: sanity_data/PNL/final_pnl.parquet
+
+Preserves DE number/type translations from the legacy notebook.
+
+Style: step-by-step (notebook-like). Each geo prints >>> STEP so a crash
+shows which block failed.
+
+Run:
+    python report_script/atros_code/pnl_report.py
+    python report_script/atros_code/pnl_report.py --geos UK,DE,AE --year 2026 --month aug
+"""
 
 from __future__ import annotations
 
@@ -26,7 +43,7 @@ try:
         save_geo_and_combined,
         upload_finals_to_azure,
     )
-except ImportError:  # support direct script execution
+except ImportError:  # direct script execution
     from atros_common import (  # type: ignore
         CLIENT,
         GEO_CONFIG,
@@ -44,6 +61,11 @@ except ImportError:  # support direct script execution
         save_geo_and_combined,
         upload_finals_to_azure,
     )
+
+
+# =============================================================================
+# DE translation tables (unchanged from legacy notebook)
+# =============================================================================
 
 DE_COLUMN_MAP = {
     "Datum/Uhrzeit": "date/time",
@@ -116,7 +138,12 @@ TRANSACTION_COLUMNS = [
 ]
 
 
-def _german_number(value: object) -> float:
+# =============================================================================
+# Helpers
+# =============================================================================
+
+def german_number(value: object) -> float:
+    """Convert German number text (1.234,56) to float."""
     if pd.isna(value) or value == "":
         return 0.0
     text = str(value).strip()
@@ -127,7 +154,16 @@ def _german_number(value: object) -> float:
     return pd.to_numeric(pd.Series([text]), errors="coerce").fillna(0).iloc[0]
 
 
-def _read_transactions(geo: str, year: int, month_abbr: str) -> pd.DataFrame:
+# keep old private name in case anything still calls it
+_german_number = german_number
+
+
+# =============================================================================
+# Step 1 — read transaction CSV for one geo / month
+# =============================================================================
+
+def read_transactions(geo: str, year: int, month_abbr: str) -> pd.DataFrame:
+    print(f"    [txn] finding transaction CSV for {geo} / {year}-{month_abbr}...")
     source = find_period_file(
         geo,
         "transaction",
@@ -138,48 +174,70 @@ def _read_transactions(geo: str, year: int, month_abbr: str) -> pd.DataFrame:
     )
     if source is None:
         raise FileNotFoundError(f"{geo} transaction CSV not found")
-    frame = pd.read_csv(source, skiprows=GEO_CONFIG[geo]["txn_skiprows"], low_memory=False)
+    print(f"    [txn] reading: {source}")
+
+    skiprows = GEO_CONFIG[geo]["txn_skiprows"]
+    frame = pd.read_csv(source, skiprows=skiprows, low_memory=False)
     frame.columns = frame.columns.astype(str).str.strip()
+
+    # DE: translate headers / types / descriptions / number format
     if GEO_CONFIG[geo]["translate_de"]:
+        print("    [txn] applying DE translations...")
         frame = frame.rename(columns=DE_COLUMN_MAP)
         frame.columns = frame.columns.astype(str).str.strip().str.lower()
-        if "type" in frame:
+        if "type" in frame.columns:
             frame["type"] = frame["type"].replace(DE_TYPE_TRANSLATIONS)
-        if "description" in frame:
+        if "description" in frame.columns:
             frame["description"] = frame["description"].replace(DE_DESCRIPTION_TRANSLATIONS)
-        for column in set(DE_COLUMN_MAP.values()) - {"date/time", "type", "order id", "sku", "description", "quantity"}:
-            if column in frame:
-                frame[column] = frame[column].map(_german_number)
+        money_cols = set(DE_COLUMN_MAP.values()) - {
+            "date/time", "type", "order id", "sku", "description", "quantity",
+        }
+        for column in money_cols:
+            if column in frame.columns:
+                frame[column] = frame[column].map(german_number)
     else:
         frame.columns = frame.columns.astype(str).str.strip().str.lower()
+
+    # ensure all expected columns exist
     for column in TRANSACTION_COLUMNS:
-        if column not in frame:
+        if column not in frame.columns:
             frame[column] = 0
+
+    # AE: keep Kinetica rows only
     if geo == "AE":
+        print("    [txn] AE filter: description contains 'kinetica'")
         frame = frame[
             frame["description"].astype(str).str.contains("kinetica", case=False, na=False)
         ].copy()
+
+    print(f"    [txn] rows loaded: {len(frame):,}")
     return frame
 
 
-def _build_geo_pnl(geo: str, year: int, month_abbr: str, year_month: str) -> pd.DataFrame:
-    cogs = read_cogs(geo)
-    mapping = build_sku_mapping(cogs)
-    transaction = _read_transactions(geo, year, month_abbr)
-    transaction["SKU"] = transaction["sku"].map(lambda value: clean_sku(value, mapping))
+_read_transactions = read_transactions  # back-compat alias
+
+
+# =============================================================================
+# Step 2 — derive line-level P&L metric columns on the transaction frame
+# =============================================================================
+
+def add_transaction_metrics(transaction: pd.DataFrame) -> pd.DataFrame:
+    """Order / refund flags → sales, returns, fee buckets (same formulas as before)."""
+    print("    [metrics] cleaning types + numeric columns...")
+    transaction = transaction.copy()
     transaction["type"] = transaction["type"].fillna("").astype(str).str.strip()
     transaction["description"] = transaction["description"].fillna("").astype(str).str.strip()
 
     numeric_columns = [
-        column
-        for column in TRANSACTION_COLUMNS
-        if column not in {"date/time", "type", "order id", "sku", "description"}
+        col for col in TRANSACTION_COLUMNS
+        if col not in {"date/time", "type", "order id", "sku", "description"}
     ]
     for column in numeric_columns:
         transaction[column] = numeric(transaction[column])
 
     is_order = transaction["type"].str.casefold().eq("order")
     is_refund = transaction["type"].str.casefold().isin({"refund", "refund_retrocharge"})
+
     revenue_base = (
         transaction["product sales"]
         + transaction["postage credits"]
@@ -191,6 +249,7 @@ def _build_geo_pnl(geo: str, year: int, month_abbr: str, year_month: str) -> pd.
         + transaction["shipping credits tax"]
         + transaction["giftwrap credits tax"]
     )
+
     source_quantity = transaction["quantity"].copy()
     transaction["quantity"] = transaction["quantity"].where(is_order, 0)
     transaction["refund quantity"] = source_quantity.where(is_refund, 0)
@@ -206,6 +265,7 @@ def _build_geo_pnl(geo: str, year: int, month_abbr: str, year_month: str) -> pd.
 
     type_lower = transaction["type"].str.casefold()
     description_lower = transaction["description"].str.casefold()
+
     transaction["Liquidations"] = transaction["other transaction fees"].where(
         type_lower.str.contains("liquidations"), 0
     ) + transaction["other"].where(
@@ -240,42 +300,16 @@ def _build_geo_pnl(geo: str, year: int, month_abbr: str, year_month: str) -> pd.
         & description_lower.isin({"cost of advertising", "advertising costs", "werbekosten"}),
         0,
     )
+    return transaction
 
-    value_columns = [
-        "Ad Cost",
-        "Deal Fee",
-        "FBA Inventory Fee",
-        "FBA Reimbursement",
-        "Liquidations",
-        "Net Sales",
-        "Net Sales with tax",
-        "Other marketing Expenses",
-        "Storage Fee",
-        "Total Return with tax",
-        "Total Sales",
-        "Total Sales with tax",
-        "Total Units",
-        "Total_Return_Amount",
-        "fba fees",
-        "promotional rebates",
-        "quantity",
-        "refund quantity",
-        "selling fees",
-        "marketplace withheld tax",
-    ]
-    pnl = transaction.groupby("SKU", as_index=False)[value_columns].sum()
-    ads = read_bulk_metrics(geo, year, month_abbr, cogs, ("Spend",))
-    pnl = pnl.merge(ads, on="SKU", how="outer").fillna(0)
 
-    cogs_columns = [column for column in ("SKU", "Product Category", "Product Name", "Product CoGS") if column in cogs]
-    cogs_frame = cogs[cogs_columns].copy()
-    cogs_frame["SKU"] = cogs_frame["SKU"].map(lambda value: clean_sku(value, mapping))
-    if "Product CoGS" not in cogs_frame:
-        cogs_frame["Product CoGS"] = 0
-    cogs_frame["Product CoGS"] = numeric(cogs_frame["Product CoGS"])
-    cogs_frame = cogs_frame.drop_duplicates("SKU", keep="last")
-    pnl = pnl.merge(cogs_frame, on="SKU", how="left").fillna(0)
-    pnl["Cogs"] = pnl["Product CoGS"] * pnl["Total Units"]
+# =============================================================================
+# Step 3 — CM1 / CM2 / CM3 (AE has special rules; UK/DE share the other branch)
+# =============================================================================
+
+def add_contribution_margins(pnl: pd.DataFrame, geo: str) -> pd.DataFrame:
+    print(f"    [cm] computing CM1/CM2/CM3 for {geo}...")
+    pnl = pnl.copy()
 
     if geo == "AE":
         pnl["CM1"] = np.where(
@@ -308,7 +342,12 @@ def _build_geo_pnl(geo: str, year: int, month_abbr: str, year_month: str) -> pd.
             default=np.nan,
         )
     else:
-        pnl["CM1"] = pnl["Net Sales with tax"] - pnl["Cogs"].abs() if geo == "DE" else pnl["Net Sales with tax"] - pnl["Cogs"]
+        # DE uses abs(Cogs); UK uses Cogs as-is
+        if geo == "DE":
+            pnl["CM1"] = pnl["Net Sales with tax"] - pnl["Cogs"].abs()
+        else:
+            pnl["CM1"] = pnl["Net Sales with tax"] - pnl["Cogs"]
+
         pnl["heads_CM2"] = pnl[
             ["Deal Fee", "FBA Inventory Fee", "Liquidations", "Storage Fee", "fba fees", "FBA Reimbursement"]
         ].sum(axis=1)
@@ -322,13 +361,93 @@ def _build_geo_pnl(geo: str, year: int, month_abbr: str, year_month: str) -> pd.
         )
         pnl["CM3"] = pnl["CM2"] + pnl["heads_CM3"]
 
+    return pnl
+
+
+# =============================================================================
+# Step 4 — full P&L for one geo
+# =============================================================================
+
+VALUE_COLUMNS = [
+    "Ad Cost",
+    "Deal Fee",
+    "FBA Inventory Fee",
+    "FBA Reimbursement",
+    "Liquidations",
+    "Net Sales",
+    "Net Sales with tax",
+    "Other marketing Expenses",
+    "Storage Fee",
+    "Total Return with tax",
+    "Total Sales",
+    "Total Sales with tax",
+    "Total Units",
+    "Total_Return_Amount",
+    "fba fees",
+    "promotional rebates",
+    "quantity",
+    "refund quantity",
+    "selling fees",
+    "marketplace withheld tax",
+]
+
+
+def build_one_geo_pnl(geo: str, year: int, month_abbr: str, year_month: str) -> pd.DataFrame:
+    print(f"\n>>> STEP: KNC / {geo} / pnl ({year_month})")
+
+    # --- COGS + SKU map ---
+    print("    [pnl] reading COGS...")
+    cogs = read_cogs(geo)
+    mapping = build_sku_mapping(cogs)
+
+    # --- transactions ---
+    transaction = read_transactions(geo, year, month_abbr)
+    transaction["SKU"] = transaction["sku"].map(lambda value: clean_sku(value, mapping))
+    transaction = add_transaction_metrics(transaction)
+
+    # --- group by SKU ---
+    print("    [pnl] grouping by SKU...")
+    pnl = transaction.groupby("SKU", as_index=False)[VALUE_COLUMNS].sum()
+
+    # --- ad Spend from bulk ops ---
+    print("    [pnl] reading bulk Ad Spend...")
+    ads = read_bulk_metrics(geo, year, month_abbr, cogs, ("Spend",))
+    pnl = pnl.merge(ads, on="SKU", how="outer").fillna(0)
+
+    # --- COGS join ---
+    print("    [pnl] joining Product CoGS...")
+    cogs_columns = [col for col in ("SKU", "Product Category", "Product Name", "Product CoGS") if col in cogs.columns]
+    cogs_frame = cogs[cogs_columns].copy()
+    cogs_frame["SKU"] = cogs_frame["SKU"].map(lambda value: clean_sku(value, mapping))
+    if "Product CoGS" not in cogs_frame.columns:
+        cogs_frame["Product CoGS"] = 0
+    cogs_frame["Product CoGS"] = numeric(cogs_frame["Product CoGS"])
+    cogs_frame = cogs_frame.drop_duplicates("SKU", keep="last")
+    pnl = pnl.merge(cogs_frame, on="SKU", how="left").fillna(0)
+    pnl["Cogs"] = pnl["Product CoGS"] * pnl["Total Units"]
+
+    # --- contribution margins ---
+    pnl = add_contribution_margins(pnl, geo)
+
+    # --- meta ---
     pnl["Year-Month"] = year_month
     pnl["Channel"] = GEO_CONFIG[geo]["channel"]
     pnl["platform"] = "Amazon"
     pnl["country"] = GEO_CONFIG[geo]["country"]
     pnl["client_id"] = "TH-1753144646395"
-    return normalize_columns(pnl)
 
+    pnl = normalize_columns(pnl)
+    print(f"    [pnl] DONE {geo}: {len(pnl):,} rows")
+    return pnl
+
+
+# used by ad_sales_report.py — keep this name
+_build_geo_pnl = build_one_geo_pnl
+
+
+# =============================================================================
+# Step 5 — all geos → save → optional Azure
+# =============================================================================
 
 def build_pnl_dataframe(
     *,
@@ -341,27 +460,37 @@ def build_pnl_dataframe(
 ) -> pd.DataFrame:
     if client.upper() != CLIENT:
         raise ValueError("pnl_report supports KNC only")
+
     resolved_year, _, month_abbr, year_month = resolve_year_month(year, month)
+    print("=" * 60)
+    print(f"CLIENT : {CLIENT}")
+    print(f"PERIOD : {year_month}  (month folder = {month_abbr})")
+    print("=" * 60)
+
     frames: dict[str, pd.DataFrame] = {}
     for geo in parse_geos(geos):
         try:
-            frames[geo] = _build_geo_pnl(geo, resolved_year, month_abbr, year_month)
+            frames[geo] = build_one_geo_pnl(geo, resolved_year, month_abbr, year_month)
             print(f"Built {geo} P&L: {len(frames[geo]):,} rows")
         except (FileNotFoundError, OSError, ValueError, KeyError) as exc:
             print(f"WARNING: skipping {geo} P&L: {exc}")
-    combined = (
-        save_geo_and_combined(
+
+    if save_output:
+        print("\n>>> STEP: save geo + combined pnl masters")
+        combined = save_geo_and_combined(
             frames,
             client=client,
             report_subdir="pnl",
             name_suffix="pnl",
             dedupe_subset=("sku", "year_month", "channel", "client_id"),
         )
-        if save_output
-        else concat_geo_frames(frames, report_type="pnl")
-    )
+    else:
+        combined = concat_geo_frames(frames, report_type="pnl")
+
     if upload_azure is True and not combined.empty:
+        print("\n>>> STEP: Azure upload (pnl)")
         upload_finals_to_azure(combined, report_type="pnl")
+
     return combined
 
 
@@ -376,6 +505,7 @@ def run(
     skip_azure: bool = False,
     **_: object,
 ) -> pd.DataFrame:
+    """Portal / pipeline entry."""
     combined = build_pnl_dataframe(
         client=client,
         geos=geos,
@@ -384,13 +514,22 @@ def run(
         save_output=save_output,
         upload_azure=False,
     )
+
     if save_output and not combined.empty:
+        print("\n>>> STEP: Azure upload decision")
         if resolve_azure_upload_choice(upload_azure, skip_azure=skip_azure):
             upload_finals_to_azure(combined, report_type="pnl")
         else:
             print("[KNC] Azure upload skipped. Local pnl masters kept.")
+
+    print("-" * 60)
+    print(f"Done. Combined pnl rows: {len(combined):,}")
     return combined
 
+
+# =============================================================================
+# CLI
+# =============================================================================
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -402,11 +541,13 @@ def main() -> None:
     parser.add_argument("--skip-azure", action="store_true")
     parser.add_argument("--no-save", action="store_true")
     args = parser.parse_args()
+
     choice: bool | None = None
     if args.upload_azure:
         choice = True
     elif args.skip_azure:
         choice = False
+
     run(
         client=args.client,
         geos=args.geos,
@@ -418,8 +559,8 @@ def main() -> None:
     )
 
 
-from config_manager.report_helpers import print_script_completed
-
 if __name__ == "__main__":
+    from config_manager.report_helpers import print_script_completed
+
     main()
-    print_script_completed('pnl_report')
+    print_script_completed("pnl_report")

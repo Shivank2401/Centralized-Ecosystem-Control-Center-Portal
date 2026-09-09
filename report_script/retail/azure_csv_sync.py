@@ -1,13 +1,14 @@
 """
-Shared Azure CSV append + dedupe helpers for ESH retail scripts (KeHE / Sprouts).
+Shared Azure CSV append + dedupe helpers for ESH retail (KeHE / Sprouts).
 
-Credentials from .env (never hardcode):
-  AZURE_STORAGE_CONNECTION_STRING
-  or AZURE_STORAGE_ACCOUNT_NAME + AZURE_STORAGE_ACCOUNT_KEY
-  CONTAINER_NAME_ESH  (e.g. thrive-client-ecosoulhome)
+Covers:
+  - Credentials: AZURE_STORAGE_CONNECTION_STRING or account/key; CONTAINER_NAME_ESH
+  - Default blob folder: sanity_data/retail/ (RETAIL_BLOB_PREFIX / WALMART_BLOB_PREFIX)
+  - download_existing_csv → concat → hash dedupe → upload overwrite
 
-Blob layout default folder: sanity_data/retail/
+Not a standalone report — imported by a_kehe.py and b_sprouts.py.
 """
+
 from __future__ import annotations
 
 import os

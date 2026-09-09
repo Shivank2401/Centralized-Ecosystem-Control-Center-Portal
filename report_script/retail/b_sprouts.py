@@ -1,25 +1,17 @@
 """
 ESH Sprouts retail combiner (chain store, inventory, inventory at risk).
 
-Ports the notebook/script into the pipeline:
-  - processing logic preserved
-  - paths from .env via config_manager.paths.esh_retail_root()
-  - CLI entrypoint: run(client='ESH')
-
-Outputs (under ESH retail root):
-  Retail-Dashboard_Files/Sprouts-All.xlsx
-  us/output/Sprouts/Sprouts Database Files/Sprouts-All_filestypes_{datestr}.xlsx
-
-Azure CSV append (CONTAINER_NAME_ESH / sanity_data/retail/):
-  sprout_chain_store.csv
-  sprout_inventory.csv
-  sprouts_risk.csv
+Covers:
+  - Client: ESH — paths via esh_retail_root() / us/input/distributors/Sprouts
+  - Local Excel: Retail-Dashboard_Files/Sprouts-All.xlsx + dated Sprouts Database Files
+  - Azure CSV append (CONTAINER_NAME_ESH / sanity_data/retail/):
+      sprout_chain_store, sprout_inventory, sprouts_risk
 
 Run:
-  python report_script/retail/b_sprouts.py
-  python report_script/retail/b_sprouts.py --skip-azure
-  # or via run_pipeline.py → Stage: retail → Sprouts
+    python report_script/retail/b_sprouts.py
+    python report_script/retail/b_sprouts.py --skip-azure
 """
+
 from __future__ import annotations
 
 import argparse

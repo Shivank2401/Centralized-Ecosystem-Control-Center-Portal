@@ -1,16 +1,16 @@
 """
-Convert any JSON file to CSV.
+Convert any JSON file to CSV (flatten nested dicts/lists).
 
-Interactive script (same logic as original):
-1) Ask user for JSON file path (or pass --json)
-2) Flatten nested dicts/lists into a flat row dictionary
-3) Ask user for CSV output path (or pass --csv / default beside JSON)
+Covers:
+  - Interactive path prompts or --json / --csv
+  - Flattens nested structures into columns; list-of-dicts → indexed keys
+  - Default CSV written beside the JSON when --csv omitted
 
 Run:
-  python report_script/utility_codes/c_convert_json_to_csv.py
-  python report_script/utility_codes/c_convert_json_to_csv.py --json data.json --csv out.csv
-  # or via run_pipeline.py → Stage: utility_codes → Convert JSON to CSV
+    python report_script/utility_codes/c_convert_json_to_csv.py
+    python report_script/utility_codes/c_convert_json_to_csv.py --json data.json --csv out.csv
 """
+
 from __future__ import annotations
 
 import argparse

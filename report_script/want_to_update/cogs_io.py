@@ -1,4 +1,15 @@
-"""Shared helpers for ESH / KNC COGS: Azure upload / download + optional local IO."""
+"""
+Shared ESH/KNC COGS Azure upload/download + local parquet/CSV IO.
+
+Covers:
+  - Azure prefixes: thrive-client-ecosoulhome/cogs and thrive-client-kinetica/cogs
+  - Container: COGS_AZURE_CONTAINER / ITEM_MASTER_CONTAINER / default app-helper
+  - Local: {project_root}/cogs/{client}/{country}_{channel}_cogs.parquet|.csv
+  - Used by esh_cogs, knc_cogs, download_cogs, pincode
+
+Helper library — not a pipeline stage by itself.
+"""
+
 from __future__ import annotations
 
 import os

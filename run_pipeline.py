@@ -63,7 +63,18 @@ def _prompt_choice(title: str, options: List[Tuple[str, str]], allow_all: bool =
     if allow_all:
         print(f"{len(options) + 1}. All")
 
-    raw = input(f"\nSelect {title.rstrip(':').lower()}: ").strip()
+    subject = title.rstrip(":").lower()
+    if allow_all:
+        print(
+            f"(pick one or more: comma-separated indexes/codes, e.g. 1,2 or "
+            f"{options[0][0]}"
+            f"{',' + options[1][0] if len(options) > 1 else ''} "
+            f"| {len(options) + 1} / All = everything)"
+        )
+    else:
+        print("(pick one or more: comma-separated indexes/codes, e.g. 1,3)")
+
+    raw = input(f"\nSelect {subject}: ").strip()
     if not raw:
         raise SystemExit("No selection made.")
 
@@ -102,6 +113,8 @@ def _prompt_choice(title: str, options: List[Tuple[str, str]], allow_all: bool =
         if c not in seen:
             seen.add(c)
             out.append(c)
+    if not out:
+        raise SystemExit("No valid selection made.")
     return out
 
 

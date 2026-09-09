@@ -1,18 +1,24 @@
 """
 Client-aware Amazon FBA Inventory Ageing combiner.
 
-Supports EcoSoul (ESH) and Kinetica (KNC) with shared cleaning/metrics and
-client-specific SKU cleaning + COGS sheets + inventory layouts.
+Covers:
+  - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
+  - Source: amazon fba_inventory / KNC fba Inventory year-month folders
+  - SKU clean via esh_sku_cleaning / knc_sku_cleaning + COGS sheets
+  - Outputs: sanity_data/{CLIENT}/ageing/{GEO}_ageing_inventory.parquet
+  - Run log + new-SKU vs COGS under sanity_data/{CLIENT}/logs/
 
-Outputs (per client):
-  sanity_data/{CLIENT}/ageing/{GEO}_ageing_inventory.parquet
+Adding a NEW client (no ETL changes needed):
+  1. Add client + geos in client.yaml / geography.yaml / layouts.py
+  2. Add one `_xxx_config()` below and register it in CLIENT_CONFIGS
+  3. List the client on this report in report.yaml
 
-Run examples:
-  python report_script/ageing_report.py
-  python report_script/ageing_report.py --client ESH
-  python report_script/ageing_report.py --client KNC --geos UK,DE,AE
-  python report_script/ageing_report.py --client ESH --years 2026 --months aug
-  python report_script/common_sanity_report/ageing_report.py --client ESH --geos DE
+Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
+
+Run:
+    python report_script/common_sanity_report/ageing_report.py
+    python report_script/common_sanity_report/ageing_report.py --client ESH
+    python report_script/common_sanity_report/ageing_report.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -48,16 +54,17 @@ from report_script.common_sanity_report.new_sku_check import (
 )
 from report_script.common_sanity_report.run_logs import ReportRunLog
 
-# ---------------------------------------------------------------------------
-# Run knobs (edit here, or override via CLI)
-# ---------------------------------------------------------------------------
 
-CLIENT: str = "KNC"  # "ESH" | "KNC"
-PROCESS_GEOS: Optional[List[str]] = None  # None = all enabled for client; e.g. ["US","CA"]
+# =============================================================================
+# Run knobs
+# =============================================================================
 
-VALID_YEARS = {"2023", "2024", "2025","2026"}
-PROCESS_YEARS: Optional[List[str]] = ["2023", "2024", "2025","2026"]
-PROCESS_MONTHS: Optional[List[str]] = None  # e.g. ["aug"] / ["Aug-2026"]
+CLIENT: str = "ESH" | "KNC"  # "ESH" | "KNC"
+PROCESS_GEOS: Optional[List[str]] = None
+
+VALID_YEARS = {"2023", "2024", "2025", "2026"}
+PROCESS_YEARS: Optional[List[str]] = ["2023", "2024", "2025", "2026"]
+PROCESS_MONTHS: Optional[List[str]] = None
 
 SAVE_OUTPUT = True
 APPLY_TRANSFORM = True
@@ -67,9 +74,10 @@ PARQUET_NAME_SUFFIX = "ageing_inventory"
 MAX_DOS_CAP = 365
 DEDUPE_SUBSET = ["client", "geography", "date", "sku"]
 
-# ---------------------------------------------------------------------------
+
+# =============================================================================
 # Shared column sets (ESH notebook + KNC calculated cols)
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 FINAL_COLUMNS = [
     "date",
@@ -156,10 +164,22 @@ PIVOT_VALUES = [
     "estimated_ais_456_plus_days",
 ]
 
+# Short DE exports (2024/2025) use a reduced Amazon column set
+AGEING_COLUMN_ALIASES: Dict[str, str] = {
+    "reserved_fc_transfer": "fc_transfer",
+    "afn_fc_transfer_quantity": "fc_transfer",
+    "inventory_age_snapshot_date": "snapshot_date",
+    "inv_age_181_to_330_days": "inv_age_181_to_270_days",
+    "inv_age_331_to_365_days": "inv_age_271_to_365_days",
+    "quantity_to_be_charged_ais_365_plus_days": "quantity_to_be_charged_ais_456_plus_days",
+}
 
-# ---------------------------------------------------------------------------
+
+# =============================================================================
 # Client configuration
-# ---------------------------------------------------------------------------
+#   New client = copy a builder + register in CLIENT_CONFIGS.
+#   Fill geo_roots OR geo_folders + relative_ageing_path.
+# =============================================================================
 
 @dataclass
 class ClientAgeingConfig:
@@ -167,15 +187,14 @@ class ClientAgeingConfig:
     client_id: str
     client_name: str
     base_path: Path
-    # folder-name under base (ESH) OR absolute ageing roots per geo code (KNC)
-    layout: str  # "esh" | "knc"
-    geo_folders: Dict[str, str] = field(default_factory=dict)  # folder -> code (ESH)
-    geo_roots: Dict[str, Path] = field(default_factory=dict)  # code -> path (KNC)
+    layout: str
+    geo_folders: Dict[str, str] = field(default_factory=dict)
+    geo_roots: Dict[str, Path] = field(default_factory=dict)
     cogs_path: Path = field(default_factory=Path)
-    cogs_sheets: Dict[str, str] = field(default_factory=dict)  # geo code -> sheet
-    sku_backend: str = "esh"  # "esh" | "knc"
-    product_name_contains: Dict[str, str] = field(default_factory=dict)  # geo -> needle
-    sku_source_by_geo: Dict[str, str] = field(default_factory=dict)  # geo -> clean source
+    cogs_sheets: Dict[str, str] = field(default_factory=dict)
+    sku_backend: str = "esh"
+    product_name_contains: Dict[str, str] = field(default_factory=dict)
+    sku_source_by_geo: Dict[str, str] = field(default_factory=dict)
     relative_ageing_path: Path = field(
         default_factory=lambda: Path("input") / "amazon" / "fba_inventory"
     )
@@ -223,7 +242,8 @@ CLIENT_CONFIGS: Dict[str, Callable[[], ClientAgeingConfig]] = {
 def get_client_config(client: str) -> ClientAgeingConfig:
     key = str(client).strip().upper()
     if key not in CLIENT_CONFIGS:
-        raise ValueError(f"Unknown client '{client}'. Expected one of: {list(CLIENT_CONFIGS)}")
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"Unknown client '{client}'. Expected one of: {known}")
     return CLIENT_CONFIGS[key]()
 
 
@@ -234,7 +254,6 @@ def output_dir_for(client_code: str) -> Path:
 def geo_code_label(geography: str, cfg: ClientAgeingConfig) -> str:
     g = str(geography).strip()
     if g.upper() in {c.upper() for c in cfg.cogs_sheets}:
-        # already a code
         for code in cfg.cogs_sheets:
             if code.upper() == g.upper():
                 return code
@@ -245,19 +264,15 @@ def geo_code_label(geography: str, cfg: ClientAgeingConfig) -> str:
     return g.upper()
 
 
-# ---------------------------------------------------------------------------
-# SKU / COGS helpers (client dispatch)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# SKU / COGS
+# =============================================================================
 
 def load_client_sku_mapping(
     cfg: ClientAgeingConfig,
     geography_code: Optional[str] = None,
 ) -> dict:
-    geos = (
-        [geography_code]
-        if geography_code
-        else list(cfg.cogs_sheets.keys())
-    )
+    geos = [geography_code] if geography_code else list(cfg.cogs_sheets.keys())
     if cfg.sku_backend == "knc":
         return knc_sku_cleaning.load_sku_mapping(geos=geos)
     return esh_sku_cleaning.load_sku_mapping(geos=geos)
@@ -279,37 +294,34 @@ def clean_client_skus(
     )
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Discovery / IO
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def resolve_geo_targets(
     cfg: ClientAgeingConfig,
     geos: Optional[Sequence[str]] = None,
 ) -> List[Tuple[str, Path]]:
-    """
-    Return list of (geo_code, ageing_root_path).
-    ageing_root contains year folders.
-    """
+    """Prefer geo_roots when set; else geo_folders + relative_ageing_path."""
     wanted: Optional[Set[str]] = None
     if geos is not None:
         wanted = {str(g).strip().upper() for g in geos}
 
     targets: List[Tuple[str, Path]] = []
 
-    if cfg.layout == "esh":
-        for folder, code in cfg.geo_folders.items():
+    if cfg.geo_roots:
+        for code, root in cfg.geo_roots.items():
             if wanted is not None and code.upper() not in wanted:
                 continue
-            root = cfg.base_path / folder / cfg.relative_ageing_path
             if not root.is_dir():
                 print(f"[WARN] [{cfg.client_code}] Ageing path missing: {root}")
                 continue
             targets.append((code, root))
     else:
-        for code, root in cfg.geo_roots.items():
+        for folder, code in cfg.geo_folders.items():
             if wanted is not None and code.upper() not in wanted:
                 continue
+            root = cfg.base_path / folder / cfg.relative_ageing_path
             if not root.is_dir():
                 print(f"[WARN] [{cfg.client_code}] Ageing path missing: {root}")
                 continue
@@ -397,7 +409,6 @@ def read_ageing_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
     for attempt in range(1, retries + 1):
         try:
             _hydrate_onedrive_file(file_path)
-            # utf-8-sig strips a real BOM; fall back for older/odd encodings.
             for encoding in ("utf-8-sig", "utf-8", "latin1"):
                 try:
                     return pd.read_csv(file_path, encoding=encoding)
@@ -422,33 +433,12 @@ def read_ageing_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
     raise RuntimeError(f"Failed to read {file_path}: {last_error}")
 
 
-# ---------------------------------------------------------------------------
-# Transform
-# ---------------------------------------------------------------------------
-
-# Short DE exports (2024/2025) use a reduced Amazon column set; map aliases
-# onto the standard FINAL/PIVOT names used for full geo files.
-AGEING_COLUMN_ALIASES: Dict[str, str] = {
-    # FC transfer naming (full Amazon export / Reserved FC Transfer)
-    "reserved_fc_transfer": "fc_transfer",
-    "afn_fc_transfer_quantity": "fc_transfer",
-    # Snapshot date alternates
-    "inventory_age_snapshot_date": "snapshot_date",
-    # Short-format age buckets → nearest standard FINAL cols
-    "inv_age_181_to_330_days": "inv_age_181_to_270_days",
-    "inv_age_331_to_365_days": "inv_age_271_to_365_days",
-    # Short-format AIS 365+ bucket → standard 456+ / estimated_ais_365_plus
-    "quantity_to_be_charged_ais_365_plus_days": "quantity_to_be_charged_ais_456_plus_days",
-}
-
+# =============================================================================
+# Transform (ETL — do not change formulas when cleaning style)
+# =============================================================================
 
 def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Unify Amazon ageing headers across full vs short (DE 2024/2025) exports.
-
-    Full files use ``snapshot-date`` + 90+ cols; short files use a BOM-quoted
-    ``snapshot-date`` and a reduced set. Coalesce first, then apply aliases.
-    """
+    """Unify Amazon ageing headers across full vs short (DE 2024/2025) exports."""
     out = coalesce_snake_columns(df)
 
     rename_map: Dict[str, str] = {}
@@ -456,7 +446,6 @@ def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
         if src in out.columns and dest not in out.columns:
             rename_map[src] = dest
         elif src in out.columns and dest in out.columns and src != dest:
-            # Prefer existing dest; fill gaps from alias
             out[dest] = out[dest].combine_first(out[src])
             out = out.drop(columns=[src])
     if rename_map:
@@ -476,7 +465,6 @@ def ensure_snapshot_date(df: pd.DataFrame) -> pd.DataFrame:
                 break
     if "snapshot_date" not in out.columns:
         raise KeyError("Expected snapshot_date column in ageing file")
-    # DE (and other geos) mix US-style (3/5/2024) and ISO (2025-01-01) in one frame.
     out["date"] = (
         pd.to_datetime(out["snapshot_date"], errors="coerce", format="mixed")
         .dt.strftime("%Y-%m-%d")
@@ -507,7 +495,6 @@ def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
         / 3,
     )
 
-    # KNC named this DOS_2 — keep canonical name `dos`
     out["dos"] = np.where(
         out["sell_thru"] > 0,
         np.minimum(out["available"] / out["sell_thru"], MAX_DOS_CAP),
@@ -550,7 +537,6 @@ def transform_geography_frame(
     ageing = normalize_headers(geo_df)
     ageing = ensure_snapshot_date(ageing)
 
-    # Optional product-name filter (KNC AE keeps Kinetica-branded rows)
     needle = cfg.product_name_contains.get(geography_code)
     if needle:
         name_col = None
@@ -631,7 +617,7 @@ def transform_ageing(
     frames: List[pd.DataFrame] = []
     for geography, geo_df in raw_df.groupby("geography", sort=True):
         code = geo_code_label(str(geography), cfg)
-        print(f"\n=== Transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows) ===")
+        print(f"\n>>> STEP: transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows)")
         try:
             sku_mapping = load_client_sku_mapping(cfg, code)
             cleaned = transform_geography_frame(
@@ -661,7 +647,7 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\nSaving per-geography ageing parquet outputs to: {output_dir}")
+    print(f"\n>>> STEP: save per-geography ageing → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
@@ -671,9 +657,9 @@ def save_geography_outputs(
     return saved
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Build pipeline
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def process_year_folder(
     year_path: Path,
@@ -757,8 +743,10 @@ def build_ageing_dataframe(
     processed_files: Set[Path] = set()
     stats = LoadStats()
 
+    print("\n>>> STEP: load raw ageing files")
     for geo_code, ageing_root in resolve_geo_targets(cfg, geos):
         stats.geographies.add(geo_code)
+        print(f"  geo root [{geo_code}]: {ageing_root}")
         for year_path in discover_year_folders(ageing_root, years=years):
             year = year_path.name
             stats.year_folders.add(f"{geo_code}/{year}")
@@ -796,11 +784,12 @@ def build_ageing_dataframe(
                 run_log.append(line)
 
         if apply_transform and not new_df.empty:
-            print("\nApplying ageing transform (SKU clean + pivot + calculated metrics)...")
+            print("\n>>> STEP: transform (SKU clean + pivot + calculated metrics)")
             new_df = transform_ageing(new_df, cfg=cfg)
             print(f"Transformed new slice shape: {new_df.shape}")
 
         if merge_existing:
+            print("\n>>> STEP: merge with existing parquet masters")
             existing_df = load_existing_parquet_outputs(
                 out_dir, name_suffix=PARQUET_NAME_SUFFIX
             )
@@ -813,6 +802,7 @@ def build_ageing_dataframe(
             master_df = new_df
 
         if not master_df.empty:
+            print("\n>>> STEP: new SKU check")
             check_final_dataframe_new_skus(
                 master_df,
                 client=cfg.client_code,
@@ -825,37 +815,23 @@ def build_ageing_dataframe(
     finally:
         run_log.flush()
 
+    print("-" * 60)
+    print(f"Done. Master shape: {master_df.shape}")
     return master_df, failed_files, stats
 
+
+# =============================================================================
+# CLI / pipeline entry
+# =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Client-wise ageing inventory combiner")
     parser.add_argument("--client", default=CLIENT, choices=sorted(CLIENT_CONFIGS.keys()))
-    parser.add_argument(
-        "--geos",
-        default=None,
-        help="Comma-separated geo codes (e.g. US,CA or UK,DE,AE). Default=all.",
-    )
-    parser.add_argument(
-        "--years",
-        default=None,
-        help="Comma-separated years (e.g. 2026). Default=PROCESS_YEARS.",
-    )
-    parser.add_argument(
-        "--months",
-        default=None,
-        help="Comma-separated month tokens (e.g. aug,jul). Default=all.",
-    )
-    parser.add_argument(
-        "--no-merge",
-        action="store_true",
-        help="Do not merge with existing parquet outputs.",
-    )
-    parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="Skip writing parquet outputs.",
-    )
+    parser.add_argument("--geos", default=None, help="Comma-separated geo codes")
+    parser.add_argument("--years", default=None, help="Comma-separated years")
+    parser.add_argument("--months", default=None, help="Comma-separated month tokens")
+    parser.add_argument("--no-merge", action="store_true")
+    parser.add_argument("--no-save", action="store_true")
     return parser.parse_args(argv)
 
 
@@ -904,4 +880,4 @@ def run(
 
 if __name__ == "__main__":
     master_ageing_df, failed_files = main()
-    print_script_completed('ageing_report')
+    print_script_completed("ageing_report")

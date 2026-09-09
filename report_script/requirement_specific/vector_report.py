@@ -1,32 +1,18 @@
 """
-Vector Datahive — Amazon inventory snapshot (requirement-specific).
+Vector Datahive — Amazon inventory snapshot from sanity slices + COGS.
 
-Builds one geo slice from the standard sanity dataset:
-  manage_fba + reserved + ledger (instock) + ageing + orders + local COGS
-
-Inputs (must already exist):
-  sanity_data/{CLIENT}/manage_fba/{GEO}_manage_fba_inventory.parquet
-  sanity_data/{CLIENT}/reserved/{GEO}_reserved_inventory.parquet
-  sanity_data/{CLIENT}/ledger/{GEO}_ledger_inventory.parquet
-  sanity_data/{CLIENT}/ageing/{GEO}_ageing_inventory.parquet
-  sanity_data/{CLIENT}/orders/{GEO}_orders_database.parquet
-  cogs/{client}/{geo}_amazon_cogs.parquet
-
-Output:
-  sanity_data/{CLIENT}/vector_report/{geo}_{platform}_inventory_report.parquet
-  sanity_data/{CLIENT}/vector_report/{geo}_{platform}_inventory_report.csv
-
-FC transfer qty (per geography, applied inside each worker):
-  AE / IN  → use ageing.fc_transfer  (manage FBA has no afn_fc_transfer_quantity)
-  other    → use manage_fba.afn_fc_transfer_quantity
-  If the chosen source is 0, fall back to reserved.reserved_fc_transfers.
+Covers:
+  - Clients: ESH + KNC (geos via --geos / client.yaml)
+  - Inputs: manage_fba, reserved, ledger, ageing, orders + cogs/{client}/{geo}_amazon_cogs
+  - FC transfer: AE/IN from ageing.fc_transfer; else manage_fba (fallback reserved)
+  - Outputs: sanity_data/{CLIENT}/vector_report/{geo}_{platform}_inventory_report.parquet|.csv
 
 Run:
-  python report_script/requirement_specific/vector_report.py
-  python report_script/requirement_specific/vector_report.py --client ESH --geos US,AE,IN
-  python report_script/requirement_specific/vector_report.py --client KNC --geos UK,DE,AE
-  # or via run_pipeline.py → Stage: requirement_specific → Vector Datahive
+    python report_script/requirement_specific/vector_report.py
+    python report_script/requirement_specific/vector_report.py --client ESH --geos US,AE,IN
+    python report_script/requirement_specific/vector_report.py --client KNC --geos UK,DE,AE
 """
+
 from __future__ import annotations
 
 import argparse

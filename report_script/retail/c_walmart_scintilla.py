@@ -1,30 +1,20 @@
 """
-ESH Walmart / Scintilla retail sync.
+ESH Walmart / Scintilla retail sync (inventory, sales, order forecast, store sales).
 
-Ports main_walmart_scintilla.py into the pipeline:
-  - processing logic unchanged
-  - Azure paths match the working main script
-  - credentials / local Walmart root come from .env
+Covers:
+  - Client: ESH — ESH_WALMART_ROOT Excel sources + sku_helper.csv
+  - Local masters: {walmart}/sanity_report/walmart_scintilla_*.csv
+  - Azure parquet replace under CONTAINER_NAME_ESH / sanity_data/retail/ (prompted)
+  - Datasets: inventory, sales, order_forecast, store_sales (+ SKU helper hash sync)
 
-Azure layout (same as main_walmart_scintilla.py):
-  container : CONTAINER_NAME_ESH  (thrive-client-ecosoulhome)
-  folder    : WALMART_BLOB_PREFIX (default sanity_data/retail)
-
-Store sales / inventory / sales / order_forecast sync:
-  Excel → CSV archive under {dataset}/{year}/{month}/ →
-  read ALL CSVs in that folder → full-row dedupe →
-  append onto local sanity_report/{report}.csv → full-row dedupe →
-  save local CSV → ask user yes/no → optional upload/replace Azure parquet
-  (no daily Azure parquet download)
-
-SKU helper still uses the legacy append-only hash sync (also gated by the same prompt).
+No daily Azure download — builds from local CSV history then optional upload.
 
 Run:
-  python report_script/retail/c_walmart_scintilla.py
-  python report_script/retail/c_walmart_scintilla.py --upload-azure
-  python report_script/retail/c_walmart_scintilla.py --skip-azure
-  # or via run_pipeline.py → Stage: retail → Walmart Scintilla
+    python report_script/retail/c_walmart_scintilla.py
+    python report_script/retail/c_walmart_scintilla.py --upload-azure
+    python report_script/retail/c_walmart_scintilla.py --skip-azure
 """
+
 from __future__ import annotations
 
 import argparse

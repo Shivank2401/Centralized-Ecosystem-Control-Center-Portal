@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-ESH Amazon Shipping Queue — country-wise cleaning pipeline.
+ESH Amazon Shipping Queue — download, SKU-map, clean, upload by country.
 
-Flow:
-  1. Download raw shipments summary CSV from Azure Blob (with date lookback).
-  2. Map merchant SKUs to master SKUs using country COGS (ON_1..ON_5 aliases).
-  3. Clean dates, status text, and discrepancy quantities.
-  4. Save locally and optionally upload processed CSV + Parquet to Azure.
+Covers:
+  - Client: ESH — countries from cogs_sheet_{cc}=… in .env
+  - Raw Azure: data_dump/shipping_queue/amazon/YYYY/MM/DD/{cc}_shipments_summary.csv
+  - SKU map: cogs/esh/{cc}_amazon_cogs (ON_1..ON_5) or Azure helper_files/cogs
+  - Local: PROCESSED_ROOT/shipping_queue/ESH-{cc}-Amazon_Shipping_Queue_azure.csv
+  - Azure out: sanity_data/shipping_queue/{cc}_amazon_shipping_queue.csv (+ parquet)
+
+Run:
+    python report_script/shipping_queue/esh_shipping_queue.py
+    python report_script/shipping_queue/esh_shipping_queue.py --countries US,AE
 """
 
 from __future__ import annotations

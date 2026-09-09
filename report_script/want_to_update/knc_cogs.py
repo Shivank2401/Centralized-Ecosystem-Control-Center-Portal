@@ -1,27 +1,17 @@
 """
-KNC COGS export — Excel sheets -> Azure only.
+KNC COGS export — Excel sheets → Azure only (no local project write).
 
-Source workbook: KNC_COGS_PATH (.env) via layouts.cogs_path("KNC").
-
-Azure (container app-helper):
-  thrive-client-kinetica/cogs/{country}_{channel}_cogs.{parquet,csv}
-
-Sheets:
-  Main         -> UK amazon
-  Shopify      -> UK shopify (+ IE shopify, same sheet)
-  Germany-COGS -> DE amazon
-  KCA-AE       -> AE amazon
-
-IE Shopify is included when UK is selected (or geos omitted).
-
-Local project copies are pulled separately via:
-  report_script/supply_chain/d_download_cogs.py
+Covers:
+  - Source: KNC_COGS_PATH — Main (UK amazon), Shopify (UK+IE shopify), Germany-COGS, KCA-AE
+  - Azure: app-helper / thrive-client-kinetica/cogs/{country}_{channel}_cogs.*
+  - IE Shopify included when UK selected (or geos omitted)
+  - Local cogs/knc/ pulled separately via helper_files_nd_saving/download_cogs.py
 
 Run:
-  python report_script/want_to_update/knc_cogs.py
-  python report_script/want_to_update/knc_cogs.py --geos UK,DE
-  # or via run_pipeline.py -> Stage: want_to_update -> KNC COGS
+    python report_script/want_to_update/knc_cogs.py
+    python report_script/want_to_update/knc_cogs.py --geos UK,DE
 """
+
 from __future__ import annotations
 
 import argparse

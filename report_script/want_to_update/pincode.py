@@ -1,25 +1,19 @@
 """
-Pincode master export — Excel (+ AE city map) -> local CSV + Azure.
+Pincode master export — Excel (+ AE city map) → local CSV + Azure.
 
-Source workbook: ESH_PINCODE_PATH or
-  {ESH_DATA_ROOT}/dashboard_essential_files/pincode.xlsx
+Covers:
+  - Geos: US, CA, DE, UK, IN, AE, IE (AE hardcoded ship-city map)
+  - Source: ESH_PINCODE_PATH or {ESH_DATA_ROOT}/dashboard_essential_files/pincode.xlsx
+  - Local: {project_root}/pincode/{cc}_amazon_pincode.csv
+  - Azure: app-helper / pincode/{cc}_amazon_pincode.csv
 
-Local output:
-  {project_root}/pincode/{cc}_amazon_pincode.csv
-
-Azure (container app-helper):
-  pincode/{cc}_amazon_pincode.csv
-
-Geos: US, CA, DE, UK, IN, AE, IE
-AE is a hardcoded ship-city map (same as original notebook).
-Pipeline run() always exports every geo (ignores selected client geos).
-CLI `--geos` still filters when running the script directly.
+Pipeline run() exports every geo; CLI --geos still filters direct runs.
 
 Run:
-  python report_script/want_to_update/pincode.py
-  python report_script/want_to_update/pincode.py --geos UK,US --skip-azure
-  # or via run_pipeline.py -> Stage: want_to_update -> Pincode
+    python report_script/want_to_update/pincode.py
+    python report_script/want_to_update/pincode.py --geos UK,US --skip-azure
 """
+
 from __future__ import annotations
 
 import argparse

@@ -1,18 +1,16 @@
 """
-Export unique image basenames from a folder to CSV.
+Export unique image basenames from a folder to a one-column CSV.
 
-Original behavior: list image files in a folder, strip extensions, dedupe/sort,
-write a one-column CSV (`image_name`).
-
-Run knobs (edit here) or CLI:
-  FOLDER_PATH / --folder
-  OUTPUT_CSV / --output
+Covers:
+  - Scans png/jpg/jpeg/webp/bmp/tiff; strips extensions; dedupe + sort
+  - Output column: image_name (default image_list.csv)
+  - Defaults: UTILITY_IMAGE_FOLDER / UTILITY_IMAGE_OUTPUT env or script knobs
 
 Run:
-  python report_script/utility_codes/b_check_duplicate_image.py
-  python report_script/utility_codes/b_check_duplicate_image.py --folder "D:/imgs" --output image_list.csv
-  # or via run_pipeline.py → Stage: utility_codes → Export image names
+    python report_script/utility_codes/b_check_duplicate_image.py
+    python report_script/utility_codes/b_check_duplicate_image.py --folder "D:/imgs" --output image_list.csv
 """
+
 from __future__ import annotations
 
 import argparse

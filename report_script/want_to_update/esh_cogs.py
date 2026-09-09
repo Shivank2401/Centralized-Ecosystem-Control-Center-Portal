@@ -1,19 +1,17 @@
 """
-ESH COGS export — Excel sheets -> Azure only.
+ESH COGS export — Excel sheets → Azure only (no local project write).
 
-Source workbook: ESH_COGS_PATH (.env) via layouts.cogs_path("ESH").
-
-Azure (container app-helper):
-  thrive-client-ecosoulhome/cogs/{country}_{channel}_cogs.{parquet,csv}
-
-Local project copies are pulled separately via:
-  report_script/supply_chain/d_download_cogs.py
+Covers:
+  - Source: ESH_COGS_PATH workbook sheets ESH-UK/CA/USA/UAE/IN/DE
+  - Geos: UK, CA, US, AE, IN, DE → {country}_amazon_cogs (US CSV stem usa_amazon)
+  - Azure: app-helper / thrive-client-ecosoulhome/cogs/*.{parquet,csv}
+  - Local cogs/esh/ pulled separately via helper_files_nd_saving/download_cogs.py
 
 Run:
-  python report_script/want_to_update/esh_cogs.py
-  python report_script/want_to_update/esh_cogs.py --geos UK,US
-  # or via run_pipeline.py -> Stage: want_to_update -> ESH COGS
+    python report_script/want_to_update/esh_cogs.py
+    python report_script/want_to_update/esh_cogs.py --geos UK,US
 """
+
 from __future__ import annotations
 
 import argparse

@@ -1,19 +1,22 @@
 """
 Client-aware Amazon Inventory Ledger combiner.
 
-Supports EcoSoul (ESH) and Kinetica (KNC). Processing matches ledger_database.py
-for all geos; KNC AE adds Title contains "Kinetica" and amazon_ae SKU cleaning.
+Covers:
+  - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
+  - Source: ledger_report year folders; KNC AE adds Title "Kinetica" + amazon_ae SKU clean
+  - Date cleaning matches ledger.ipynb (do not change)
+  - Outputs: sanity_data/{CLIENT}/ledger/{GEO}_ledger_inventory.parquet|.csv
 
-Date cleaning is copied EXACTLY from ledger.ipynb (do not change).
+Adding a NEW client (no ETL changes needed):
+  1. Add client + geos in client.yaml / geography.yaml / layouts.py
+  2. Add one `_xxx_config()` below and register it in CLIENT_CONFIGS
+  3. List the client on this report in report.yaml
 
-Outputs (per client):
-  sanity_data/{CLIENT}/ledger/{GEO}_ledger_inventory.parquet
-  (+ .csv)
+Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
 
-Run examples:
-  python report_script/ledger_report.py --client ESH
-  python report_script/ledger_report.py --client KNC --geos UK,DE,AE
-  python report_script/ledger_report.py --client ESH --years 2026
+Run:
+    python report_script/common_sanity_report/ledger_report.py --client ESH
+    python report_script/common_sanity_report/ledger_report.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -48,11 +51,12 @@ from report_script.common_sanity_report.new_sku_check import (
 )
 from report_script.common_sanity_report.run_logs import ReportRunLog
 
-# ---------------------------------------------------------------------------
-# Run knobs
-# ---------------------------------------------------------------------------
 
-CLIENT: str = "KNC"  # "ESH" | "KNC"
+# =============================================================================
+# Run knobs
+# =============================================================================
+
+CLIENT: str = "ESH" | "KNC" # "ESH" | "KNC"
 PROCESS_GEOS: Optional[List[str]] = None
 
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
@@ -104,9 +108,11 @@ CHECKLIST_ALIAS_COLUMNS = [
 ]
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Client configuration
-# ---------------------------------------------------------------------------
+#   New client = copy a builder + register in CLIENT_CONFIGS.
+#   Fill geo_roots OR geo_folders + relative_ledger_path.
+# =============================================================================
 
 @dataclass
 class ClientLedgerConfig:
@@ -114,13 +120,13 @@ class ClientLedgerConfig:
     client_id: str
     client_name: str
     base_path: Path
-    layout: str  # "esh" | "knc"
+    layout: str
     geo_folders: Dict[str, str] = field(default_factory=dict)
-    geo_roots: Dict[str, Path] = field(default_factory=dict)  # code -> year-parent root
+    geo_roots: Dict[str, Path] = field(default_factory=dict)
     cogs_path: Path = field(default_factory=Path)
     cogs_sheets: Dict[str, str] = field(default_factory=dict)
     sku_backend: str = "esh"
-    title_contains: Dict[str, str] = field(default_factory=dict)  # geo -> needle
+    title_contains: Dict[str, str] = field(default_factory=dict)
     sku_source_by_geo: Dict[str, str] = field(default_factory=dict)
     relative_ledger_path: Path = field(
         default_factory=lambda: Path("input") / "amazon" / "inventory_ledger"
@@ -169,7 +175,8 @@ CLIENT_CONFIGS: Dict[str, Callable[[], ClientLedgerConfig]] = {
 def get_client_config(client: str) -> ClientLedgerConfig:
     key = str(client).strip().upper()
     if key not in CLIENT_CONFIGS:
-        raise ValueError(f"Unknown client '{client}'. Expected one of: {list(CLIENT_CONFIGS)}")
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"Unknown client '{client}'. Expected one of: {known}")
     return CLIENT_CONFIGS[key]()
 
 
@@ -190,19 +197,15 @@ def geo_code_label(geography: str, cfg: ClientLedgerConfig) -> str:
     return upper
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # SKU / COGS
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def load_client_sku_mapping(
     cfg: ClientLedgerConfig,
     geography_code: Optional[str] = None,
 ) -> dict:
-    geos = (
-        [geography_code]
-        if geography_code
-        else list(cfg.cogs_sheets.keys())
-    )
+    geos = [geography_code] if geography_code else list(cfg.cogs_sheets.keys())
     if cfg.sku_backend == "knc":
         return knc_sku_cleaning.load_sku_mapping(geos=geos)
     return esh_sku_cleaning.load_sku_mapping(geos=geos)
@@ -224,21 +227,30 @@ def clean_client_skus(
     )
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Discovery / IO
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def resolve_geo_targets(
     cfg: ClientLedgerConfig,
     geos: Optional[Sequence[str]] = None,
 ) -> List[Tuple[str, Path]]:
-    """Return (geo_code, root_containing_YYYY_folders)."""
+    """Prefer geo_roots when set; else geo_folders + relative_ledger_path."""
     wanted: Optional[Set[str]] = None
     if geos is not None:
         wanted = {str(g).strip().upper() for g in geos}
 
     targets: List[Tuple[str, Path]] = []
-    if cfg.layout == "esh":
+
+    if cfg.geo_roots:
+        for code, root in cfg.geo_roots.items():
+            if wanted is not None and code.upper() not in wanted:
+                continue
+            if not root.is_dir():
+                print(f"[WARN] [{cfg.client_code}] Ledger path missing: {root}")
+                continue
+            targets.append((code, root))
+    else:
         for folder, code in cfg.geo_folders.items():
             if wanted is not None and code.upper() not in wanted:
                 continue
@@ -247,14 +259,7 @@ def resolve_geo_targets(
                 print(f"[WARN] [{cfg.client_code}] Ledger path missing: {root}")
                 continue
             targets.append((code, root))
-    else:
-        for code, root in cfg.geo_roots.items():
-            if wanted is not None and code.upper() not in wanted:
-                continue
-            if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Ledger path missing: {root}")
-                continue
-            targets.append((code, root))
+
     return sorted(targets, key=lambda t: t[0])
 
 
@@ -358,9 +363,9 @@ def read_ledger_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
     raise RuntimeError(f"Failed to read {file_path}: {last_error}")
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Checklist aliases + date cleaning (exact ledger_database / notebook logic)
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def _resolve_alias_column(df: pd.DataFrame, canonical: str) -> Optional[str]:
     if canonical in df.columns:
@@ -466,7 +471,6 @@ def _filter_title_if_needed(
 
     title_col = _resolve_alias_column(df, "Title")
     if title_col is None:
-        # try case variants after strip
         for c in df.columns:
             if str(c).strip().lower() == "title":
                 title_col = c
@@ -537,7 +541,7 @@ def transform_ledger(
     frames: List[pd.DataFrame] = []
     for geography, geo_df in raw_df.groupby("geography", sort=True):
         code = geo_code_label(str(geography), cfg)
-        print(f"\n=== Transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows) ===")
+        print(f"\n>>> STEP: transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows)")
         try:
             sku_mapping = load_client_sku_mapping(cfg, code)
             cleaned = transform_geography_frame(
@@ -567,7 +571,7 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\nSaving per-geography ledger outputs to: {output_dir}")
+    print(f"\n>>> STEP: save per-geography ledger → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
@@ -579,9 +583,9 @@ def save_geography_outputs(
     return saved
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Build pipeline
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def process_year_folder(
     year_path: Path,
@@ -664,8 +668,10 @@ def build_ledger_dataframe(
     processed_files: Set[Path] = set()
     stats = LoadStats()
 
+    print("\n>>> STEP: load raw ledger files")
     for geo_code, ledger_root in resolve_geo_targets(cfg, geos):
         stats.geographies.add(geo_code)
+        print(f"  geo root [{geo_code}]: {ledger_root}")
         for year_path in discover_year_folders(ledger_root, years=years):
             year = year_path.name
             stats.year_folders.add(f"{geo_code}/{year}")
@@ -703,14 +709,12 @@ def build_ledger_dataframe(
                 run_log.append(line)
 
         if apply_transform and not new_df.empty:
-            print(
-                "\nApplying ledger transform "
-                "(checklist aliases + date clean + daily agg)..."
-            )
+            print("\n>>> STEP: transform (aliases + date clean + daily agg)")
             new_df = transform_ledger(new_df, cfg=cfg)
             print(f"Transformed new slice shape: {new_df.shape}")
 
         if merge_existing:
+            print("\n>>> STEP: merge with existing parquet masters")
             existing_df = load_existing_parquet_outputs(
                 out_dir, name_suffix=PARQUET_NAME_SUFFIX
             )
@@ -723,6 +727,7 @@ def build_ledger_dataframe(
             master_df = new_df
 
         if not master_df.empty:
+            print("\n>>> STEP: new SKU check")
             check_final_dataframe_new_skus(
                 master_df,
                 client=cfg.client_code,
@@ -735,8 +740,14 @@ def build_ledger_dataframe(
     finally:
         run_log.flush()
 
+    print("-" * 60)
+    print(f"Done. Master shape: {master_df.shape}")
     return master_df, failed_files, stats
 
+
+# =============================================================================
+# CLI / pipeline entry
+# =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Client-wise ledger inventory combiner")
@@ -794,4 +805,4 @@ def run(
 
 if __name__ == "__main__":
     master_ledger_df, failed_files = main()
-    print_script_completed('ledger_report')
+    print_script_completed("ledger_report")

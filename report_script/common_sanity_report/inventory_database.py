@@ -1,41 +1,35 @@
 """
-Client-aware Amazon inventory database combiner (ESH + KNC).
+Client-aware Amazon inventory database (manage_fba + reserved + ageing).
 
-Merges already-built sanity slices per geography:
-  manage_fba + reserved + ageing (fc_transfer)
+Covers:
+  - Clients: ESH + KNC (geos from client.yaml)
+  - Inputs (must exist): manage_fba, reserved, ageing parquet under sanity_data/{CLIENT}/
+  - Ageing date +1 for US/CA; FC transfer AE/IN from ageing else manage/reserved rules
+  - Outputs: sanity_data/{CLIENT}/inventory_database/{GEO}_inventory_database.parquet|.csv
 
-Notebook source: report_script/common_sanity_report/inventory_database.ipynb
-(originally working for ESH US). Same merge / FC-transfer / reserved-qty logic,
-applied to every enabled geo for the selected client.
+Does not re-read raw Amazon downloads — only merges sanity slices.
 
-Inputs (must already exist):
-  sanity_data/{CLIENT}/manage_fba/{GEO}_manage_fba_inventory.parquet
-  sanity_data/{CLIENT}/reserved/{GEO}_reserved_inventory.parquet
-  sanity_data/{CLIENT}/ageing/{GEO}_ageing_inventory.parquet
+Adding a NEW client (no ETL changes needed):
+  1. Add client + geos in client.yaml / geography.yaml / layouts.py
+  2. Optionally add an entry in CLIENT_OVERRIDES (sku_backend / geo rule sets)
+  3. List the client on this report in report.yaml
+  Client identity + geo list come from YAML automatically.
 
-Output:
-  sanity_data/{CLIENT}/inventory_database/{GEO}_inventory_database.parquet
-  sanity_data/{CLIENT}/inventory_database/{GEO}_inventory_database.csv
-
-Ageing date: US / CA add +1 day; all other geos add 0 days.
-FC transfer:
-  AE / IN → ageing.fc_transfer, else reserved.reserved_fc_transfers when 0
-  other   → manage_fba.afn_fc_transfer_quantity, else reserved when 0
-Reserved qty: if afn_reserved_quantity is 0, use reserved.reserved_qty.
+Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
 
 Run:
-  python report_script/common_sanity_report/inventory_database.py
-  python report_script/common_sanity_report/inventory_database.py --client ESH
-  python report_script/common_sanity_report/inventory_database.py --client KNC --geos UK,DE,AE
-  # or via run_pipeline.py → Stage: common → Inventory Database
+    python report_script/common_sanity_report/inventory_database.py
+    python report_script/common_sanity_report/inventory_database.py --client ESH
+    python report_script/common_sanity_report/inventory_database.py --client KNC --geos UK,DE,AE
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set
 
 import numpy as np
 import pandas as pd
@@ -46,6 +40,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from config_manager import layouts, paths as cfg_paths
 from config_manager.loader import load_geographies
+from config_manager.report_helpers import print_script_completed
 from report_script.common_sanity_report.new_sku_check import (
     check_final_dataframe_new_skus,
 )
@@ -54,15 +49,21 @@ from report_script.common_sanity_report.run_logs import (
     format_inventory_database_geo_section,
 )
 
-CLIENT: str = "ESH"
+
+# =============================================================================
+# Run knobs + merge constants (ETL)
+# =============================================================================
+
+CLIENT: str = "ESH" | "KNC" # "ESH" | "KNC"
 PROCESS_GEOS: Optional[List[str]] = None
 SAVE_OUTPUT = True
 
 PARQUET_NAME_SUFFIX = "inventory_database"
 OUTPUT_SUBDIR = "inventory_database"
 
-AGEING_DATE_PLUS_ONE_GEOS = {"US", "CA"}
-FC_TRANSFER_FROM_AGEING_GEOS = {"AE", "IN"}
+# Default geo rules (apply to any client unless overridden)
+DEFAULT_AGEING_DATE_PLUS_ONE_GEOS = {"US", "CA"}
+DEFAULT_FC_TRANSFER_FROM_AGEING_GEOS = {"AE", "IN"}
 
 AGEING_KEEP_COLS = ["geography", "date", "sku", "fc_transfer"]
 RESERVED_DROP_COLS = ["client", "client_id"]
@@ -77,6 +78,29 @@ CALC_COLS = [
 ]
 
 
+# =============================================================================
+# Client configuration
+#   Identity + geos come from YAML. CLIENT_OVERRIDES only for sku_backend / rules.
+# =============================================================================
+
+@dataclass(frozen=True)
+class ClientInventoryOverrides:
+    sku_backend: str = "esh"
+    ageing_date_plus_one_geos: Set[str] = field(
+        default_factory=lambda: set(DEFAULT_AGEING_DATE_PLUS_ONE_GEOS)
+    )
+    fc_transfer_from_ageing_geos: Set[str] = field(
+        default_factory=lambda: set(DEFAULT_FC_TRANSFER_FROM_AGEING_GEOS)
+    )
+
+
+# Register known clients here. Unknown clients still work via YAML + defaults.
+CLIENT_OVERRIDES: Dict[str, ClientInventoryOverrides] = {
+    "ESH": ClientInventoryOverrides(sku_backend="esh"),
+    "KNC": ClientInventoryOverrides(sku_backend="knc"),
+}
+
+
 @dataclass(frozen=True)
 class InventoryDbConfig:
     client_code: str
@@ -86,10 +110,23 @@ class InventoryDbConfig:
     sku_backend: str
     sanity_root: Path
     output_dir: Path
+    ageing_date_plus_one_geos: Set[str] = field(
+        default_factory=lambda: set(DEFAULT_AGEING_DATE_PLUS_ONE_GEOS)
+    )
+    fc_transfer_from_ageing_geos: Set[str] = field(
+        default_factory=lambda: set(DEFAULT_FC_TRANSFER_FROM_AGEING_GEOS)
+    )
 
 
 def _client_geos(client: str) -> List[str]:
     return [str(g).upper() for g in load_geographies(client)]
+
+
+def _overrides_for(client_code: str) -> ClientInventoryOverrides:
+    return CLIENT_OVERRIDES.get(
+        client_code.upper(),
+        ClientInventoryOverrides(),
+    )
 
 
 def get_inventory_db_config(
@@ -99,6 +136,8 @@ def get_inventory_db_config(
     ident = layouts.client_identity(client)
     code = ident["client_code"]
     allowed = _client_geos(code)
+    overrides = _overrides_for(code)
+
     if geos:
         wanted = [str(g).strip().upper() for g in geos if str(g).strip()]
         selected = [g for g in wanted if g in allowed]
@@ -116,15 +155,26 @@ def get_inventory_db_config(
         client_id=ident["client_id"],
         client_name=ident["client_name"],
         geos=selected,
-        sku_backend="knc" if code == "KNC" else "esh",
+        sku_backend=overrides.sku_backend,
         sanity_root=sanity,
         output_dir=sanity / OUTPUT_SUBDIR,
+        ageing_date_plus_one_geos=set(overrides.ageing_date_plus_one_geos),
+        fc_transfer_from_ageing_geos=set(overrides.fc_transfer_from_ageing_geos),
     )
 
 
 def output_dir_for(client_code: str) -> Path:
     return cfg_paths.sanity_data_root() / str(client_code).upper() / OUTPUT_SUBDIR
 
+
+def known_clients() -> List[str]:
+    """CLI choices: registered overrides (extend when adding CLIENT_OVERRIDES)."""
+    return sorted(CLIENT_OVERRIDES.keys())
+
+
+# =============================================================================
+# Load sanity parquet slices
+# =============================================================================
 
 def _geo_parquet(root: Path, folder: str, geo: str, suffix: str) -> Path:
     return root / folder / f"{geo.upper()}_{suffix}.parquet"
@@ -155,12 +205,17 @@ def _ensure_calc_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# =============================================================================
+# Transform (ETL — do not change formulas when cleaning style)
+# =============================================================================
+
 def build_geography_inventory(
     cfg: InventoryDbConfig,
     geo: str,
 ) -> pd.DataFrame:
     """Notebook merge + FC-transfer / reserved-qty rules for one geography."""
     client = cfg.client_code
+    print(f"\n>>> STEP: [{client}] {geo} — load manage_fba + reserved + ageing")
 
     manage_fba = load_parquet_or_empty(
         _geo_parquet(cfg.sanity_root, "manage_fba", geo, "manage_fba_inventory"),
@@ -185,6 +240,7 @@ def build_geography_inventory(
         print(f"[{client}] [{geo}] skip — manage_fba is required and empty")
         return pd.DataFrame()
 
+    print(f">>> STEP: [{client}] {geo} — merge + FC / reserved rules")
     manage_fba = manage_fba.copy()
     manage_fba["date"] = pd.to_datetime(manage_fba["date"], errors="coerce")
 
@@ -200,7 +256,7 @@ def build_geography_inventory(
         ageing = ageing.loc[:, keep].copy()
         ageing["date"] = pd.to_datetime(ageing["date"], errors="coerce")
         # Convert date to datetime and add 1 day if geography is US and CA else add 0 days
-        if geo.upper() in AGEING_DATE_PLUS_ONE_GEOS:
+        if geo.upper() in cfg.ageing_date_plus_one_geos:
             ageing["date"] = ageing["date"] + pd.Timedelta(days=1)
 
     inventory_database = manage_fba
@@ -231,7 +287,7 @@ def build_geography_inventory(
 
     # geography based fc transfer quantity calculation:
     inventory_database["new_afn_fc_transfer_quantity"] = np.where(
-        inventory_database["geography"].isin(list(FC_TRANSFER_FROM_AGEING_GEOS)),
+        inventory_database["geography"].isin(list(cfg.fc_transfer_from_ageing_geos)),
         # For AE and IN
         np.where(
             inventory_database["fc_transfer"] == 0,
@@ -294,7 +350,7 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\nSaving per-geography inventory database outputs to: {output_dir}")
+    print(f"\n>>> STEP: save per-geography inventory_database → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
@@ -308,6 +364,10 @@ def save_geography_outputs(
         )
     return saved
 
+
+# =============================================================================
+# Build pipeline
+# =============================================================================
 
 def build_inventory_database(
     *,
@@ -334,7 +394,6 @@ def build_inventory_database(
     run_log = ReportRunLog(cfg.client_code, "inventory_database")
     try:
         for geo in cfg.geos:
-            print(f"\n=== [{cfg.client_code}] {geo} ===")
             try:
                 cleaned = build_geography_inventory(cfg, geo)
                 if not cleaned.empty:
@@ -357,6 +416,7 @@ def build_inventory_database(
 
         alerts: dict = {}
         if not master.empty:
+            print("\n>>> STEP: new SKU check")
             alerts = check_final_dataframe_new_skus(
                 master,
                 client=cfg.client_code,
@@ -364,6 +424,7 @@ def build_inventory_database(
                 run_log=run_log,
             )
 
+        print("\n>>> STEP: per-geography checklist")
         run_log.blank()
         run_log.section("Per-geography checklist")
         if master.empty:
@@ -387,14 +448,20 @@ def build_inventory_database(
     finally:
         run_log.flush()
 
+    print("-" * 60)
+    print(f"Done. Master shape: {master.shape}")
     return master
 
+
+# =============================================================================
+# CLI / pipeline entry
+# =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Client-wise Amazon inventory database (manage_fba + reserved + ageing)"
     )
-    parser.add_argument("--client", default=CLIENT, choices=["ESH", "KNC"])
+    parser.add_argument("--client", default=CLIENT, choices=known_clients())
     parser.add_argument("--geos", default=None, help="Comma-separated geo codes")
     parser.add_argument("--no-save", action="store_true")
     return parser.parse_args(argv)
@@ -430,8 +497,6 @@ def run(
     )
 
 
-from config_manager.report_helpers import print_script_completed
-
 if __name__ == "__main__":
     main()
-    print_script_completed('inventory_database')
+    print_script_completed("inventory_database")

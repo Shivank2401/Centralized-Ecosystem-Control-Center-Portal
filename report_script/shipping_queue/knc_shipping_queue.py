@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """
-KNC Amazon Shipping Queue — country-wise cleaning pipeline.
+KNC Amazon Shipping Queue — same clean flow as ESH with KNC containers/COGS.
 
-Same cleaning logic as 2_esh_shipping_queue.py; KNC-specific Azure container,
-COGS blob prefix/location, client_id, and SKU alias columns (ON_1, ON_2 only).
+Covers:
+  - Client: KNC — countries from knc_cogs_sheet_{cc}=… in .env
+  - Raw: CONTAINER_NAME_KNC_RAW data_dump/shipping_queue/amazon/…/{cc}_shipments_summary.csv
+  - COGS aliases ON_1..ON_3 (+ legacy SKU renames); Azure prefix BLOB_PREFIX_COGS_KNC
+  - Local: PROCESSED_ROOT_KNC/shipping_queue/KNC-{cc}-Amazon_Shipping_Queue_azure.csv
+  - Azure out: sanity_data/shipping_queue/{cc}_amazon_shipping_queue.csv (+ parquet)
+
+Run:
+    python report_script/shipping_queue/knc_shipping_queue.py
+    python report_script/shipping_queue/knc_shipping_queue.py --countries uk,de,ae
 """
 
 from __future__ import annotations

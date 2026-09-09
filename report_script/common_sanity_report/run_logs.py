@@ -1,14 +1,17 @@
 """
-Client / report run logs for common sanity scripts.
+Run-log writer for common sanity scripts (text + new-SKU CSV exports).
 
-Writes readable text under::
+Covers:
+  - Writes sanity_data/{CLIENT}/logs/{report}/{YYYYMMDD_HHMMSS}.log + latest.log
+  - New-SKU CSV: sanity_data/{CLIENT}/logs/new_skus_vs_cogs/{report}/latest.csv
+  - Formatters for LoadStats, geo summaries, orders period stats, inventory_database sections
 
-    sanity_data/{CLIENT}/logs/{report}/{YYYYMMDD_HHMMSS}.log
-    sanity_data/{CLIENT}/logs/{report}/latest.log
+Helper only — used via ReportRunLog from report scripts.
 
-So operators can open one file instead of scrolling terminal history for
-load summaries, geo×year breakdowns, new-SKU alerts, orders period stats,
-and inventory-database geo summaries.
+Adding a NEW client: no code change here. Paths use ``client`` string
+(``sanity_data/{CLIENT}/logs/...``). Callers just pass the new client code.
+
+Style: clear sections. Write/format logic unchanged.
 """
 
 from __future__ import annotations
@@ -22,6 +25,10 @@ import pandas as pd
 from config_manager.paths import sanity_data_root
 from config_manager.report_helpers import LoadStats
 
+
+# =============================================================================
+# Paths
+# =============================================================================
 
 def client_logs_root(client: str) -> Path:
     return sanity_data_root() / str(client).upper() / "logs"
@@ -37,6 +44,10 @@ def new_skus_csv_dir(client: str, report: str) -> Path:
     safe = str(report).strip().lower().replace(" ", "_")
     return client_logs_root(client) / "new_skus_vs_cogs" / safe
 
+
+# =============================================================================
+# New-SKU CSV export
+# =============================================================================
 
 def export_new_skus_csv(
     client: str,
@@ -82,8 +93,13 @@ def export_new_skus_csv(
     stamped = out_dir / f"{stamp}.csv"
     df.to_csv(latest, index=False)
     df.to_csv(stamped, index=False)
+    print(f"[{tag_client}] New-SKU CSV: {latest} ({len(rows)} row(s))")
     return latest
 
+
+# =============================================================================
+# ReportRunLog — accumulate text, flush to disk
+# =============================================================================
 
 class ReportRunLog:
     """Accumulate one pipeline run's summary text and flush to disk."""
@@ -118,6 +134,7 @@ class ReportRunLog:
         self._lines.append("-" * min(72, max(24, len(title))))
 
     def flush(self) -> Path:
+        print(f"\n>>> STEP: write run log [{self.client}] {self.report}")
         out_dir = report_log_dir(self.client, self.report)
         out_dir.mkdir(parents=True, exist_ok=True)
         stamp = self.started_at.strftime("%Y%m%d_%H%M%S")
@@ -126,7 +143,7 @@ class ReportRunLog:
         body = "\n".join(self._lines).rstrip() + "\n"
         self.path.write_text(body, encoding="utf-8")
         self.latest_path.write_text(body, encoding="utf-8")
-        print(f"\n[{self.client}] Run log written: {self.path}")
+        print(f"[{self.client}] Run log written: {self.path}")
         print(f"[{self.client}] Latest log   : {self.latest_path}")
         return self.path
 
@@ -139,6 +156,10 @@ class ReportRunLog:
             self.append(f"[ERROR] Run ended with {exc_type.__name__}: {exc}")
         self.flush()
 
+
+# =============================================================================
+# Formatters (for log file text — logic unchanged)
+# =============================================================================
 
 def format_load_stats(stats: LoadStats, title: str = "Load Summary") -> str:
     """Mirror ``LoadStats.print_summary`` as a single string for log files."""

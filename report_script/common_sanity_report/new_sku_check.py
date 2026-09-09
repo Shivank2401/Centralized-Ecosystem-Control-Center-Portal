@@ -1,14 +1,22 @@
 """
-New-SKU vs COGS checklist for common sanity reports.
+New-SKU vs COGS checklist helper for common sanity reports.
 
-Compares SKUs in the report's final dataframe (per client + geography)
-to the `sku` column of that client/geo COGS sheet:
+Covers:
+  - Clients: ESH + KNC (per geography)
+  - Compares final-frame SKUs to cogs/{client}/{geo}_amazon_cogs.parquet|.csv
+  - Optional alias→master map (ON_1..ON_n) via esh/knc SKU cleaning
+  - Used by manage_fba, reserved, ageing, ledger, orders, inventory_database, vector
 
-  cogs/{client}/{geo}_amazon_cogs.parquet|.csv
+Not a standalone pipeline stage — call check_final_dataframe_new_skus before export.
 
-Does not use SKU-mapping aliases (on_1, on_2, on_3, ...).
-Call on the merged/final frame immediately before export.
+Adding a NEW client (no compare logic changes needed):
+  1. Add client in client.yaml + COGS slices under cogs/{CLIENT}/
+  2. Register sku cleaner in SKU_BACKEND_BY_CLIENT below ("esh" | "knc" | custom)
+  3. Ensure a matching SKU cleaning module exists (or extend load_client_sku_mapping)
+
+Style: clear steps. Compare logic unchanged.
 """
+
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Set
@@ -18,8 +26,29 @@ import pandas as pd
 from config_manager import cogs_local, esh_sku_cleaning, knc_sku_cleaning
 from config_manager.report_helpers import to_snake
 
+
+# =============================================================================
+# Constants / client → SKU backend
+# =============================================================================
+
 _INVALID_SKUS = {"", "NAN", "NONE", "UNKNOWN", "NAT", "NULL"}
 
+# Map client code → which SKU cleaning module to use.
+# New client: add one line here (and implement cleaner if not esh/knc).
+SKU_BACKEND_BY_CLIENT: Dict[str, str] = {
+    "ESH": "esh",
+    "KNC": "knc",
+}
+
+
+def _sku_backend_for(client: str) -> str:
+    code = str(client).strip().upper()
+    return SKU_BACKEND_BY_CLIENT.get(code, "esh")
+
+
+# =============================================================================
+# Helpers
+# =============================================================================
 
 def _norm_sku(value) -> str:
     return str(value).strip().upper()
@@ -36,9 +65,9 @@ def _sku_set(series: pd.Series) -> Set[str]:
 
 def _load_client_sku_mapping(client: str, geography_code: str) -> Dict[str, str]:
     """Alias -> master SKU mapping for one client/geo."""
-    code = str(client).strip().upper()
     geos = [str(geography_code).strip().upper()] if geography_code else None
-    if code == "KNC":
+    backend = _sku_backend_for(client)
+    if backend == "knc":
         return knc_sku_cleaning.load_sku_mapping(geos=geos)
     return esh_sku_cleaning.load_sku_mapping(geos=geos)
 
@@ -67,6 +96,10 @@ def _mapped_frame_skus(
     return {s for s in mapped if s and s not in _INVALID_SKUS}
 
 
+# =============================================================================
+# COGS sheet SKUs
+# =============================================================================
+
 def cogs_sheet_skus(client: str, geography_code: str, channel: str = "amazon") -> Set[str]:
     """SKU values from that client/geo COGS sheet only (the `sku` column)."""
     try:
@@ -89,6 +122,10 @@ def cogs_sheet_skus(client: str, geography_code: str, channel: str = "amazon") -
         return set()
     return _sku_set(df["sku"])
 
+
+# =============================================================================
+# Per-geo + final-frame checks
+# =============================================================================
 
 def report_new_skus_vs_cogs(
     df: pd.DataFrame,
@@ -154,6 +191,8 @@ def check_final_dataframe_new_skus(
     """
     from report_script.common_sanity_report.run_logs import format_new_skus_section
 
+    print(f"\n>>> STEP: new-SKU vs COGS [{str(client).upper()}]" + (f" ({label})" if label else ""))
+
     if df is None or df.empty:
         msg = f"[{str(client).upper()}] No rows — skip new-SKU vs COGS check"
         print(msg)
@@ -169,7 +208,7 @@ def check_final_dataframe_new_skus(
             run_log.append(msg)
         return {}
 
-    print(f"\n[{str(client).upper()}] New SKUs vs COGS sheet (final dataframe, before export)")
+    print(f"[{str(client).upper()}] New SKUs vs COGS sheet (final dataframe, before export)")
     alerts: Dict[str, List[str]] = {}
     if geography_column in df.columns:
         for geography, geo_df in df.groupby(geography_column, sort=True):
@@ -223,7 +262,7 @@ def print_new_sku_rollup(
     """Print a short per-geo rollup when any new SKUs were found."""
     if not any(alerts.values()):
         return
-    title = f"[{str(client).upper()}] 📍😱New-SKU alert rollup👇"
+    title = f"[{str(client).upper()}] New-SKU alert rollup"
     if label:
         title = f"{title} ({label})"
     print(f"\n{title}:")
@@ -232,7 +271,10 @@ def print_new_sku_rollup(
             print(f"  {geo}: {len(skus)} SKU(s)")
 
 
-# Back-compat alias used by orders_report
+# =============================================================================
+# Back-compat
+# =============================================================================
+
 def cogs_master_skus(
     *,
     sku_backend: str = "",

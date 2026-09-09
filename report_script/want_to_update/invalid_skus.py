@@ -1,22 +1,15 @@
 """
-Manage per-client DEFAULT_INVALID_SKUS (JSON).
+Manage per-client DEFAULT_INVALID_SKUS stored in JSON.
 
-Interactive menu:
-  1) View invalid SKUs for a client
-  2) Add invalid SKUs (paste one or many)
-  3) Exit
-
-Storage:
-  config_manager/invalid_skus.json
-
-Consumed by:
-  config_manager/esh_sku_cleaning.py
-  config_manager/knc_sku_cleaning.py
+Covers:
+  - Clients: ESH, KNC, EMM — interactive view/add menu
+  - Storage: config_manager/invalid_skus.json
+  - Consumed by esh_sku_cleaning / knc_sku_cleaning during sanity SKU clean
 
 Run:
-  python report_script/want_to_update/invalid_skus.py
-  # or via run_pipeline.py -> Stage: want_to_update -> Invalid SKUs
+    python report_script/want_to_update/invalid_skus.py
 """
+
 from __future__ import annotations
 
 import argparse

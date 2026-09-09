@@ -1,7 +1,19 @@
 """
-ESH supply-chain script converted from notebook.
-Processing logic preserved; SKU helpers use config_manager.esh_sku_cleaning.
+ESH 3G + Updike warehouse databases (inventory, receipts, outgoing, ageing).
+
+Covers:
+  - Client: ESH US warehouses — Updike + 3G under ESH inventory root
+  - Inputs: Updike/3G inventory balances, WH_Orders/Receipts helpers, Amazon/Walmart shipment trackers
+  - Outputs: Output_Database/USA/Updike/{YYYY}/{Mon-YYYY}/Updike_WH_Database_{date}.xlsx
+             Output_Database/USA/3G/{YYYY}/{Mon-YYYY}/3G_WH_Database_{date}.xlsx
+  - Also archives Updike raw inventory CSV and 3G inventory_ageing dated Excel
+
+Run after all_helper_files so WH_Orders / WH_Receipts standard files exist.
+
+Run:
+    python report_script/helper_files_nd_saving/threeG_nd_updike.py
 """
+
 from __future__ import annotations
 
 import sys

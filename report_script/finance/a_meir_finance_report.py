@@ -1,30 +1,19 @@
 """
 ESH MEIR Finance — Closing Stock Analyzer + Inventory Reconciles.
 
-Ports report_script/finance/a_MEIR_Finance.ipynb without changing processing /
-cleaning / ageing / save-location conventions.
-
-User selects the MEIR **report month** (e.g. Nov-2025). Source files are then
-resolved as:
-
-  Flipkart / EasyEcom : {report}/India_Platform_{last-day-report}.xlsx
-  Walmart             : {next}/USA_Platform_{last-day-report}.xlsx
-  3G                  : {next}/3G_WH_Database_{last-day-report}.xlsx
-  Shipcube            : {next}/Inventory-Database_{01-next}.xlsx
-                        (Date column forced to last-day-report)
-  Updike              : {next}/Updike_WH_Database_{last-day-report}.xlsx
-  Amazon US + CA      : {next}/Inventory-Database_{01-next}.xlsx
-  Amazon other geos   : {report}/Inventory-Database_{last-day-report}.xlsx
-
-Outputs (under ESH inventory root):
-  Output_Database/Inventory Reconciles/{next_year}/{next}/Inventory Reconciles_{01-next}.xlsx
-  Output_Database/Closing Stock Analysis/Closing Stock Analyzer-{report}.xlsx
+Covers:
+  - Client: ESH — Flipkart, EasyEcom, Walmart, 3G, Shipcube, Updike, Amazon geos
+  - Report month drives source file dates (T / T+1 conventions per platform)
+  - Outputs under ESH inventory root:
+      Output_Database/Inventory Reconciles/.../Inventory Reconciles_{01-next}.xlsx
+      Output_Database/Closing Stock Analysis/Closing Stock Analyzer-{report}.xlsx
+  - Non-interactive (portal): previous calendar month; override MEIR_REPORT_MONTH
 
 Run:
-  python report_script/finance/a_meir_finance_report.py
-  python report_script/finance/a_meir_finance_report.py --month Nov --year 2025
-  # or via run_pipeline.py → Stage: finance → MEIR Finance
+    python report_script/finance/a_meir_finance_report.py
+    python report_script/finance/a_meir_finance_report.py --month Nov --year 2025
 """
+
 from __future__ import annotations
 
 import argparse

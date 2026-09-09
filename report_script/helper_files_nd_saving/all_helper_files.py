@@ -1,7 +1,18 @@
 """
-ESH supply-chain script converted from notebook.
-Processing logic preserved; SKU helpers use config_manager.esh_sku_cleaning.
+ESH helper-file builder (Shipbob products, containers, WH orders/receipts, Walmart shipments).
+
+Covers:
+  - Client: ESH — roots from ESH_DATA_ROOT / ESH_CENTRAL_ROOT
+  - Shipbob active/inactive/bundle dated archives under us/input/shipbob/
+  - Container_Data + Country_helper + Container_WAC under dashboard_essential_files/
+  - WH_Orders_Standard_File (3G + Updike), WH_Receipts_Standard_File, Walmart_all_shipment.xlsx
+
+Notebook-converted; processing preserved; SKU helpers via esh_sku_cleaning.
+
+Run:
+    python report_script/helper_files_nd_saving/all_helper_files.py
 """
+
 from __future__ import annotations
 
 import sys

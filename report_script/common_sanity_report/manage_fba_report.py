@@ -1,18 +1,23 @@
 """
 Client-aware Amazon Manage FBA Inventory combiner.
 
-Supports EcoSoul (ESH) and Kinetica (KNC) with shared filters/pivot and
-client-specific SKU cleaning + COGS sheets + inventory layouts.
+Covers:
+  - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
+  - Source: manage_fba_inventory year-month folders; pivot AFN qty columns
+  - No FC-transfer col for ESH AE/IN and KNC AE; KNC AE filters Title "Kinetica"
+  - Outputs: sanity_data/{CLIENT}/manage_fba/{GEO}_manage_fba_inventory.parquet|.csv
 
-Outputs (per client):
-  sanity_data/{CLIENT}/manage_fba/{GEO}_manage_fba_inventory.parquet
-  (+ .csv)
+Adding a NEW client (no ETL changes needed):
+  1. Add client + geos in client.yaml / geography.yaml / layouts.py
+  2. Add one `_xxx_config()` below and register it in CLIENT_CONFIGS
+  3. List the client on this report in report.yaml
 
-Run examples:
-  python report_script/manage_fba_report.py
-  python report_script/manage_fba_report.py --client ESH
-  python report_script/manage_fba_report.py --client KNC --geos UK,DE,AE
-  python report_script/manage_fba_report.py --client ESH --years 2026 --months jul
+Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
+
+Run:
+    python report_script/common_sanity_report/manage_fba_report.py
+    python report_script/common_sanity_report/manage_fba_report.py --client ESH
+    python report_script/common_sanity_report/manage_fba_report.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -25,7 +30,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-import numpy as np
 import pandas as pd
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -50,11 +54,12 @@ from report_script.common_sanity_report.new_sku_check import (
 )
 from report_script.common_sanity_report.run_logs import ReportRunLog
 
-# ---------------------------------------------------------------------------
-# Run knobs
-# ---------------------------------------------------------------------------
 
-CLIENT: str = "ESH"  # "ESH" | "KNC"
+# =============================================================================
+# Run knobs (defaults; CLI / pipeline can override)
+# =============================================================================
+
+CLIENT: str = "ESH" | "KNC"  # "ESH" | "KNC" | any key in CLIENT_CONFIGS
 PROCESS_GEOS: Optional[List[str]] = None
 
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
@@ -102,9 +107,12 @@ FC_TRANSFER_COL = "afn-fc-transfer-quantity"
 FC_TRANSFER_SNAKE = "afn_fc_transfer_quantity"
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Client configuration
-# ---------------------------------------------------------------------------
+#   New client = copy one of the builders below + register in CLIENT_CONFIGS.
+#   layout "esh" → geo_folders + relative_inventory_path under data_root
+#   layout "knc" → geo_roots from layouts.knc_geo_roots(...)
+# =============================================================================
 
 @dataclass
 class ClientManageFbaConfig:
@@ -112,12 +120,12 @@ class ClientManageFbaConfig:
     client_id: str
     client_name: str
     base_path: Path
-    layout: str  # "esh" | "knc"
-    geo_folders: Dict[str, str] = field(default_factory=dict)  # folder -> code
-    geo_roots: Dict[str, Path] = field(default_factory=dict)  # code -> manage root
+    layout: str  # "esh" | "knc" (or any layout that fills geo_folders / geo_roots)
+    geo_folders: Dict[str, str] = field(default_factory=dict)  # folder -> code (ESH-style)
+    geo_roots: Dict[str, Path] = field(default_factory=dict)  # code -> manage root (KNC-style)
     cogs_path: Path = field(default_factory=Path)
     cogs_sheets: Dict[str, str] = field(default_factory=dict)
-    sku_backend: str = "esh"
+    sku_backend: str = "esh"  # "esh" | "knc" (SKU cleaner module)
     product_name_contains: Dict[str, str] = field(default_factory=dict)
     sku_source_by_geo: Dict[str, str] = field(default_factory=dict)
     no_fc_transfer_geos: Set[str] = field(default_factory=set)
@@ -161,6 +169,7 @@ def _knc_config() -> ClientManageFbaConfig:
     )
 
 
+# Register clients here — only place to touch for a new client in this script.
 CLIENT_CONFIGS: Dict[str, Callable[[], ClientManageFbaConfig]] = {
     "ESH": _esh_config,
     "KNC": _knc_config,
@@ -170,7 +179,8 @@ CLIENT_CONFIGS: Dict[str, Callable[[], ClientManageFbaConfig]] = {
 def get_client_config(client: str) -> ClientManageFbaConfig:
     key = str(client).strip().upper()
     if key not in CLIENT_CONFIGS:
-        raise ValueError(f"Unknown client '{client}'. Expected one of: {list(CLIENT_CONFIGS)}")
+        known = ", ".join(sorted(CLIENT_CONFIGS))
+        raise ValueError(f"Unknown client '{client}'. Expected one of: {known}")
     return CLIENT_CONFIGS[key]()
 
 
@@ -191,19 +201,15 @@ def geo_code_label(geography: str, cfg: ClientManageFbaConfig) -> str:
     return upper
 
 
-# ---------------------------------------------------------------------------
-# SKU / COGS
-# ---------------------------------------------------------------------------
+# =============================================================================
+# SKU / COGS helpers (backend chosen by cfg.sku_backend)
+# =============================================================================
 
 def load_client_sku_mapping(
     cfg: ClientManageFbaConfig,
     geography_code: Optional[str] = None,
 ) -> dict:
-    geos = (
-        [geography_code]
-        if geography_code
-        else list(cfg.cogs_sheets.keys())
-    )
+    geos = [geography_code] if geography_code else list(cfg.cogs_sheets.keys())
     if cfg.sku_backend == "knc":
         return knc_sku_cleaning.load_sku_mapping(geos=geos)
     return esh_sku_cleaning.load_sku_mapping(geos=geos)
@@ -247,20 +253,34 @@ def pivot_values_for(geography_code: str, cfg: ClientManageFbaConfig) -> List[st
     return cols
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Discovery / IO
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def resolve_geo_targets(
     cfg: ClientManageFbaConfig,
     geos: Optional[Sequence[str]] = None,
 ) -> List[Tuple[str, Path]]:
+    """
+    Build (geo_code, inventory_root) list from client config.
+    - If geo_roots filled → use those (KNC-style)
+    - Else use geo_folders + relative_inventory_path (ESH-style)
+    """
     wanted: Optional[Set[str]] = None
     if geos is not None:
         wanted = {str(g).strip().upper() for g in geos}
 
     targets: List[Tuple[str, Path]] = []
-    if cfg.layout == "esh":
+
+    if cfg.geo_roots:
+        for code, root in cfg.geo_roots.items():
+            if wanted is not None and code.upper() not in wanted:
+                continue
+            if not root.is_dir():
+                print(f"[WARN] [{cfg.client_code}] Manage FBA path missing: {root}")
+                continue
+            targets.append((code, root))
+    else:
         for folder, code in cfg.geo_folders.items():
             if wanted is not None and code.upper() not in wanted:
                 continue
@@ -269,14 +289,7 @@ def resolve_geo_targets(
                 print(f"[WARN] [{cfg.client_code}] Manage FBA path missing: {root}")
                 continue
             targets.append((code, root))
-    else:
-        for code, root in cfg.geo_roots.items():
-            if wanted is not None and code.upper() not in wanted:
-                continue
-            if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Manage FBA path missing: {root}")
-                continue
-            targets.append((code, root))
+
     return sorted(targets, key=lambda t: t[0])
 
 
@@ -351,7 +364,6 @@ def discover_manage_fba_files(
             rel_parts = {part.lower() for part in path.relative_to(year_path).parts[:-1]}
             name_l = path.name.lower()
             name_hit = any(tok in name_l for tok in wanted)
-            # also accept full Mon-YYYY folder names
             if not ((rel_parts & wanted) or name_hit):
                 continue
         files.append(path)
@@ -403,9 +415,9 @@ def read_inventory_file(file_path: Path, retries: int = 3) -> pd.DataFrame:
     raise RuntimeError(f"Failed to read {file_path}: {last_error}")
 
 
-# ---------------------------------------------------------------------------
-# Transform
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Transform (ETL — do not change formulas when cleaning style)
+# =============================================================================
 
 def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
@@ -451,7 +463,7 @@ def transform_geography_frame(
     manage_fba = _normalize_headers(geo_df)
     manage_fba["date"] = _extract_date(manage_fba)
 
-    # Optional product-name filter (KNC AE)
+    # Optional product-name filter (e.g. KNC AE → "Kinetica")
     needle = cfg.product_name_contains.get(geography_code)
     if needle:
         name_col = None
@@ -539,7 +551,6 @@ def transform_geography_frame(
     manage_fba["client_id"] = cfg.client_id
     manage_fba["platform"] = "amazon"
 
-    # Stable column order
     front = ["client", "client_id", "geography", "platform", "date", "sku"]
     rest = [c for c in manage_fba.columns if c not in front]
     return manage_fba.loc[:, front + rest]
@@ -555,7 +566,7 @@ def transform_manage_fba(
     frames: List[pd.DataFrame] = []
     for geography, geo_df in raw_df.groupby("geography", sort=True):
         code = geo_code_label(str(geography), cfg)
-        print(f"\n=== Transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows) ===")
+        print(f"\n>>> STEP: transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows)")
         try:
             sku_mapping = load_client_sku_mapping(cfg, code)
             cleaned = transform_geography_frame(
@@ -585,7 +596,7 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\nSaving per-geography manage FBA outputs to: {output_dir}")
+    print(f"\n>>> STEP: save per-geography manage FBA → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
@@ -597,9 +608,9 @@ def save_geography_outputs(
     return saved
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Build pipeline
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 def process_year_folder(
     year_path: Path,
@@ -619,7 +630,6 @@ def process_year_folder(
         if resolved in processed_files:
             continue
 
-        # month label for stats: parent folder if not year, else filename token
         parent = file_path.parent.name
         month_label = parent if parent != year else "files"
 
@@ -691,8 +701,10 @@ def build_manage_fba_dataframe(
     processed_files: Set[Path] = set()
     stats = LoadStats()
 
+    print("\n>>> STEP: load raw manage FBA files")
     for geo_code, inventory_root in resolve_geo_targets(cfg, geos):
         stats.geographies.add(geo_code)
+        print(f"  geo root [{geo_code}]: {inventory_root}")
         for year_path in discover_year_folders(inventory_root, years=years):
             year = year_path.name
             stats.year_folders.add(f"{geo_code}/{year}")
@@ -730,11 +742,12 @@ def build_manage_fba_dataframe(
                 run_log.append(line)
 
         if apply_transform and not new_df.empty:
-            print("\nApplying manage FBA transform (filters + SKU clean + pivot)...")
+            print("\n>>> STEP: transform (filters + SKU clean + pivot)")
             new_df = transform_manage_fba(new_df, cfg=cfg)
             print(f"Transformed new slice shape: {new_df.shape}")
 
         if merge_existing:
+            print("\n>>> STEP: merge with existing parquet masters")
             existing_df = load_existing_parquet_outputs(
                 out_dir, name_suffix=PARQUET_NAME_SUFFIX
             )
@@ -747,6 +760,7 @@ def build_manage_fba_dataframe(
             master_df = new_df
 
         if not master_df.empty:
+            print("\n>>> STEP: new SKU check")
             check_final_dataframe_new_skus(
                 master_df,
                 client=cfg.client_code,
@@ -759,8 +773,14 @@ def build_manage_fba_dataframe(
     finally:
         run_log.flush()
 
+    print("-" * 60)
+    print(f"Done. Master shape: {master_df.shape}")
     return master_df, failed_files, stats
 
+
+# =============================================================================
+# CLI / pipeline entry
+# =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Client-wise manage FBA inventory combiner")
@@ -818,4 +838,4 @@ def run(
 
 if __name__ == "__main__":
     master_inventory_df, failed_files = main()
-    print_script_completed('manage_fba_report')
+    print_script_completed("manage_fba_report")

@@ -1,18 +1,16 @@
 """
-Import any CSV/Excel file to MySQL (phpMyAdmin-compatible).
+Import any CSV/Excel file to MySQL (auto-create table, snake_case columns).
 
-Converts column names to snake_case and creates the table automatically.
-Logic matches the original utility; credentials come from `.env` (not hardcoded).
-
-Env (see `.env.example`):
-  MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
-  MYSQL_POOL_NAME, MYSQL_POOL_SIZE  (optional)
+Covers:
+  - Credentials from .env: MYSQL_HOST/PORT/USER/PASSWORD/DATABASE (+ optional pool)
+  - Reads CSV or Excel; creates table if missing; bulk insert with progress bar
+  - Not client/geo-specific — interactive or --file / --table CLI
 
 Run:
-  python report_script/utility_codes/a_import_any_file_to_mysql.py
-  python report_script/utility_codes/a_import_any_file_to_mysql.py --file data.csv --table my_table
-  # or via run_pipeline.py → Stage: utility_codes → Import file to MySQL
+    python report_script/utility_codes/a_import_any_file_to_mysql.py
+    python report_script/utility_codes/a_import_any_file_to_mysql.py --file data.csv --table my_table
 """
+
 from __future__ import annotations
 
 import argparse
