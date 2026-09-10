@@ -60,10 +60,10 @@ from report_script.common_sanity_report.run_logs import (
 # Run knobs
 # =============================================================================
 
-CLIENT: str = "ESH" | "KNC" # "ESH" | "KNC"
+CLIENT = "ESH"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
-PROCESS_YEARS: Optional[List[str]] = ["2023", "2024", "2025", "2026"]
+PROCESS_YEARS: Optional[List[str]] = ["2026"]
 PROCESS_MONTHS: Optional[List[str]] = None
 
 SAVE_OUTPUT = True

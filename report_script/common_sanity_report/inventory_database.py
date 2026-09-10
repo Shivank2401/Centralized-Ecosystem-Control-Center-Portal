@@ -54,7 +54,7 @@ from report_script.common_sanity_report.run_logs import (
 # Run knobs + merge constants (ETL)
 # =============================================================================
 
-CLIENT: str = "ESH" | "KNC" # "ESH" | "KNC"
+CLIENT = "ESH"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
 SAVE_OUTPUT = True
 

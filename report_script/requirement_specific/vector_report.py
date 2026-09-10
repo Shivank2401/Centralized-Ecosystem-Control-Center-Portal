@@ -506,6 +506,92 @@ def apply_fc_transfer_qty(
     return out
 
 
+def format_geo_skipped_checklist(*, client: str, geo: str, reason: str) -> str:
+    lines = [
+        "=" * 64,
+        f"[{client}] [{geo}] CHECKLIST — SKIPPED",
+        "=" * 64,
+        f"   Reason: {reason}",
+        "=" * 64,
+    ]
+    return "\n".join(lines)
+
+
+def format_geo_error_checklist(*, client: str, geo: str, error: str) -> str:
+    lines = [
+        "=" * 64,
+        f"[{client}] [{geo}] CHECKLIST — ERROR",
+        "=" * 64,
+        f"   {error}",
+        "=" * 64,
+    ]
+    return "\n".join(lines)
+
+
+def format_client_geo_index(
+    *,
+    client: str,
+    client_name: str,
+    configured_geos: Sequence[str],
+    this_run_geos: Sequence[str],
+) -> str:
+    """Header block so the log clearly shows client + all geos for this run."""
+    configured = [str(g).upper() for g in configured_geos]
+    this_run = [str(g).upper() for g in this_run_geos]
+    lines = [
+        "=" * 72,
+        f"CLIENT: {client} ({client_name})",
+        f"Configured geos (client.yaml): {', '.join(configured) if configured else '(none)'}",
+        f"This run geos               : {', '.join(this_run) if this_run else '(none)'}",
+        f"Not in this run             : "
+        + (
+            ", ".join(g for g in configured if g not in set(this_run))
+            if any(g not in set(this_run) for g in configured)
+            else "(none — all configured geos included)"
+        ),
+        "=" * 72,
+        "Geo checklist index (in order below):",
+    ]
+    for geo in configured:
+        if geo in this_run:
+            lines.append(f"  - [{client}] [{geo}]  → processed in this run")
+        else:
+            lines.append(f"  - [{client}] [{geo}]  → SKIPPED (not selected for this run)")
+    for geo in this_run:
+        if geo not in set(configured):
+            lines.append(f"  - [{client}] [{geo}]  → processed (not listed in client.yaml)")
+    lines.append("-" * 72)
+    return "\n".join(lines)
+
+
+def format_client_run_summary(
+    *,
+    client: str,
+    geo_rows: dict[str, int],
+    geo_status: dict[str, str],
+    geos_order: Sequence[str],
+) -> str:
+    lines = [
+        "=" * 72,
+        f"[{client}] CLIENT SUMMARY — all geos",
+        "=" * 72,
+        f"{'GEO':<8} {'STATUS':<12} {'OUTPUT_ROWS':>12}",
+        "-" * 36,
+    ]
+    for geo in geos_order:
+        status = geo_status.get(geo, "unknown")
+        rows = geo_rows.get(geo, 0)
+        lines.append(f"{geo:<8} {status:<12} {rows:>12,}")
+    ok = sum(1 for g in geos_order if geo_status.get(g) == "ok")
+    total_rows = sum(geo_rows.get(g, 0) for g in geos_order)
+    lines.append("-" * 36)
+    lines.append(
+        f"geos_ok={ok}/{len(geos_order)} | combined_output_rows={total_rows:,}"
+    )
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
 def format_geo_checklist(
     *,
     client: str,
@@ -1020,6 +1106,7 @@ def build_vector_dataframe(
     max_workers: int = MAX_WORKERS,
 ) -> pd.DataFrame:
     cfg = get_vector_config(client, geos)
+    configured_geos = _client_geos(cfg.client_code)
     today = pd.Timestamp.today().strftime("%Y-%m-%d")
     yesterday = (pd.Timestamp.today() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     now = datetime.now()
@@ -1029,7 +1116,8 @@ def build_vector_dataframe(
     print("=" * 60)
     print(f"Client : {cfg.client_code} ({cfg.client_name})")
     print(f"ID     : {cfg.client_id}")
-    print(f"Geos   : {cfg.geos}")
+    print(f"Configured geos: {configured_geos}")
+    print(f"This run geos  : {cfg.geos}")
     print(f"Today  : {today} | Yesterday: {yesterday}")
     print(f"Months : current={current_month} previous={previous_month}")
     print(f"Sanity : {cfg.sanity_root}")
@@ -1043,19 +1131,32 @@ def build_vector_dataframe(
 
     frames: List[pd.DataFrame] = []
     checklists: dict[str, str] = {}
+    geo_rows: dict[str, int] = {}
+    geo_status: dict[str, str] = {}
     workers = min(max(1, int(max_workers)), max(1, len(cfg.geos)))
     if workers == 1 or len(cfg.geos) == 1:
         for geo in cfg.geos:
-            frame, checklist = process_geography(
-                cfg,
-                geo,
-                today=today,
-                yesterday=yesterday,
-                current_month=current_month,
-                previous_month=previous_month,
-            )
-            frames.append(frame)
-            checklists[geo] = checklist
+            try:
+                frame, checklist = process_geography(
+                    cfg,
+                    geo,
+                    today=today,
+                    yesterday=yesterday,
+                    current_month=current_month,
+                    previous_month=previous_month,
+                )
+                frames.append(frame)
+                checklists[geo] = checklist
+                rows = 0 if frame is None or frame.empty else len(frame)
+                geo_rows[geo] = rows
+                geo_status[geo] = "ok" if rows > 0 else "empty"
+            except Exception as exc:  # noqa: BLE001
+                print(f"[{cfg.client_code}] [{geo}] ERROR: {exc}")
+                checklists[geo] = format_geo_error_checklist(
+                    client=cfg.client_code, geo=geo, error=str(exc)
+                )
+                geo_rows[geo] = 0
+                geo_status[geo] = "error"
     else:
         print(f"\nProcessing {len(cfg.geos)} geos on {workers} threads...")
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1077,20 +1178,58 @@ def build_vector_dataframe(
                     frame, checklist = fut.result()
                     frames.append(frame)
                     checklists[geo] = checklist
+                    rows = 0 if frame is None or frame.empty else len(frame)
+                    geo_rows[geo] = rows
+                    geo_status[geo] = "ok" if rows > 0 else "empty"
                 except Exception as exc:  # noqa: BLE001
                     print(f"[{cfg.client_code}] [{geo}] ERROR: {exc}")
+                    checklists[geo] = format_geo_error_checklist(
+                        client=cfg.client_code, geo=geo, error=str(exc)
+                    )
+                    geo_rows[geo] = 0
+                    geo_status[geo] = "error"
 
-    print(f"\n[{cfg.client_code}] ========== GEO CHECKLISTS ==========")
+    # Geos configured for the client but not selected for this pipeline run
+    for geo in configured_geos:
+        if geo not in checklists:
+            checklists[geo] = format_geo_skipped_checklist(
+                client=cfg.client_code,
+                geo=geo,
+                reason="not selected for this run (pipeline geos filter)",
+            )
+            geo_rows[geo] = 0
+            geo_status[geo] = "skipped"
+
+    # Stable order: configured geos first, then any extras from this run
+    geos_order: List[str] = list(configured_geos)
+    for geo in cfg.geos:
+        if geo not in geos_order:
+            geos_order.append(geo)
+
+    print(f"\n[{cfg.client_code}] ========== GEO CHECKLISTS (client-wise) ==========")
     from report_script.common_sanity_report.run_logs import ReportRunLog
 
     run_log = ReportRunLog(cfg.client_code, "vector")
     try:
-        for geo in cfg.geos:
-            if geo in checklists:
-                print(checklists[geo])
-                print()
-                run_log.append(checklists[geo])
-                run_log.blank()
+        index_block = format_client_geo_index(
+            client=cfg.client_code,
+            client_name=cfg.client_name,
+            configured_geos=configured_geos,
+            this_run_geos=cfg.geos,
+        )
+        print(index_block)
+        print()
+        run_log.append(index_block)
+        run_log.blank()
+
+        for geo in geos_order:
+            block = checklists.get(geo)
+            if not block:
+                continue
+            print(block)
+            print()
+            run_log.append(block)
+            run_log.blank()
 
         nonempty = [f for f in frames if f is not None and not f.empty]
         master = (
@@ -1098,13 +1237,19 @@ def build_vector_dataframe(
             if nonempty
             else pd.DataFrame()
         )
-        print(
-            f"\n[{cfg.client_code}] [CHECK] combined Vector Datahive "
-            f"geos_ok={len(nonempty)}/{len(cfg.geos)} rows={len(master):,}"
+        summary = format_client_run_summary(
+            client=cfg.client_code,
+            geo_rows=geo_rows,
+            geo_status=geo_status,
+            geos_order=geos_order,
         )
+        print(summary)
+        run_log.append(summary)
+        run_log.blank()
         run_log.append(
             f"[{cfg.client_code}] [CHECK] combined Vector Datahive "
-            f"geos_ok={len(nonempty)}/{len(cfg.geos)} rows={len(master):,}"
+            f"geos_ok={len(nonempty)}/{len(cfg.geos)} "
+            f"(configured={len(configured_geos)}) rows={len(master):,}"
         )
 
         if save_output and not master.empty:
