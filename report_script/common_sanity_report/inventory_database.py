@@ -18,9 +18,9 @@ Adding a NEW client (no ETL changes needed):
 Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
 
 Run:
-    python report_script/common_sanity_report/inventory_database.py
-    python report_script/common_sanity_report/inventory_database.py --client ESH
-    python report_script/common_sanity_report/inventory_database.py --client KNC --geos UK,DE,AE
+    python report_script/amazon_reports/inventory_database.py
+    python report_script/amazon_reports/inventory_database.py --client ESH
+    python report_script/amazon_reports/inventory_database.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -41,10 +41,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config_manager import layouts, paths as cfg_paths
 from config_manager.loader import load_geographies
 from config_manager.report_helpers import print_script_completed
-from report_script.common_sanity_report.new_sku_check import (
+from report_script.amazon_reports.new_sku_check import (
     check_final_dataframe_new_skus,
 )
-from report_script.common_sanity_report.run_logs import (
+from report_script.amazon_reports.run_logs import (
     ReportRunLog,
     format_inventory_database_geo_section,
 )

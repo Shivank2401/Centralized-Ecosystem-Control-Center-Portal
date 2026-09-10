@@ -16,7 +16,7 @@ Removed as a top-level menu. API `GET /api/report-scripts` still powers Configur
 
 ## Stage key aliases
 `pipeline_engine.registry.normalize_stage_key` maps legacy report `stage` strings onto `report_stages` keys:
-- `Common Sanity Reports` / `common_sanity_reports` → `common`
+- `Common Sanity Reports` / `amazon_reportss` → `common`
 - `Supply Chain` / `supply_chain` → `helper_files_nd_saving`
 Without this, Configuration → Stages showed **0 reports** for those packages even though scripts exist.
 

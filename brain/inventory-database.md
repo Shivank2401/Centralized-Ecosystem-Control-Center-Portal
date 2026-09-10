@@ -1,8 +1,8 @@
 # Inventory database
 
-Module: `report_script.common_sanity_report.inventory_database`
+Module: `report_script.amazon_reports.inventory_database`
 
-Notebook source: `report_script/common_sanity_report/inventory_database.ipynb` (ESH US).
+Notebook source: `report_script/amazon_reports/inventory_database.ipynb` (ESH US).
 
 Standard-dataset combiner for **ESH and KNC**, all client geos.
 
@@ -37,8 +37,8 @@ Stock status (Overstock / Understock / Healthy) is computed in `vector_report`, 
 
 ## Run
 ```bash
-python report_script/common_sanity_report/inventory_database.py --client ESH
-python report_script/common_sanity_report/inventory_database.py --client KNC --geos UK,DE,AE
+python report_script/amazon_reports/inventory_database.py --client ESH
+python report_script/amazon_reports/inventory_database.py --client KNC --geos UK,DE,AE
 ```
 
 Pipeline: Stage **common** → Inventory Database.

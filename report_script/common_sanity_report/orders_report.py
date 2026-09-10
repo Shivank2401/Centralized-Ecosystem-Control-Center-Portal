@@ -17,9 +17,9 @@ Adding a NEW client (no ETL changes needed):
 Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
 
 Run:
-    python report_script/common_sanity_report/orders_report.py
-    python report_script/common_sanity_report/orders_report.py --client ESH --geos US,UK
-    python report_script/common_sanity_report/orders_report.py --client KNC --years 2026
+    python report_script/amazon_reports/orders_report.py
+    python report_script/amazon_reports/orders_report.py --client ESH --geos US,UK
+    python report_script/amazon_reports/orders_report.py --client KNC --years 2026
 """
 
 from __future__ import annotations
@@ -49,10 +49,10 @@ from config_manager.report_helpers import (
     load_existing_parquet_outputs,
     print_script_completed,
 )
-from report_script.common_sanity_report.new_sku_check import (
+from report_script.amazon_reports.new_sku_check import (
     check_final_dataframe_new_skus,
 )
-from report_script.common_sanity_report.run_logs import (
+from report_script.amazon_reports.run_logs import (
     ReportRunLog,
 )
 

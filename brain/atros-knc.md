@@ -1,6 +1,6 @@
 # Atros — KNC PNL / ads / decomposition
 
-Stage: **atros** (separate from `common_sanity_report`).  
+Stage: **atros** (separate from `amazon_reports`).  
 Client: **KNC** only. Geos: **UK, DE, AE**.
 
 ## Modules

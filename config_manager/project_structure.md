@@ -63,7 +63,7 @@ Centralized Ecosystem Portal/
 │   └── __init__.py
 │
 ├── report_script/
-│   ├── common_sanity_report/     # Stage: common (ESH + KNC); CLIENT_CONFIGS per script
+│   ├── amazon_reports/     # Stage: common (ESH + KNC); CLIENT_CONFIGS per script
 │   │   ├── manage_fba_report.py / reserved_report.py / ageing_report.py / ledger_report.py
 │   │   ├── orders_report.py      # 3-month Qty/Sales period table before export
 │   │   ├── inventory_database.py
@@ -225,7 +225,7 @@ Report `stage` strings in YAML may not match `report_stages` keys. Aliases:
 
 | Report `stage` value | Resolves to stage key |
 |----------------------|------------------------|
-| `Common Sanity Reports` / `common_sanity_reports` | `common` |
+| `Common Sanity Reports` / `amazon_reportss` | `common` |
 | `Supply Chain` / `supply_chain` | `helper_files_nd_saving` |
 
 Without aliases, portal stage counts show **0 reports** for those packages.
@@ -312,7 +312,7 @@ On success (no exception):
 
 | Folder | Use for |
 |--------|---------|
-| `common_sanity_report/` | Standard Amazon combiners (incl. orders + inventory DB) |
+| `amazon_reports/` | Standard Amazon combiners (incl. orders + inventory DB) |
 | `helper_files_nd_saving/` | Helper files, 3G/Updike, raw archive (ESH + KNC), COGS download |
 | `requirement_specific/` | Built on `sanity_data` (vector, Emami, SC inventory) |
 | `want_to_update/` | COGS upload, pincode, invalid SKUs |
@@ -346,7 +346,7 @@ On success (no exception):
 
 Hide: `enabled: false`. Portal **Developer → Add Report** can also register uploads.
 
-**Common sanity reports** (`common_sanity_report/`): each combiner uses `CLIENT_CONFIGS` / overrides — add a new client by registering config (plus yaml/layouts), without changing ETL. Scripts print `>>> STEP` for easier debugging.
+**Common sanity reports** (`amazon_reports/`): each combiner uses `CLIENT_CONFIGS` / overrides — add a new client by registering config (plus yaml/layouts), without changing ETL. Scripts print `>>> STEP` for easier debugging.
 
 **MEIR finance** (`finance/a_meir_finance_report.py`): ESH-only today via `CLIENT_CONFIGS`; same `>>> STEP` style. Ageing / pivot formulas unchanged — new clients need path/layout registration first.
 

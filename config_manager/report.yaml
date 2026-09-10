@@ -59,7 +59,7 @@ reports:
   ageing:
     label: Ageing
     stage: Common Sanity Reports
-    module: report_script.common_sanity_report.ageing_report
+    module: report_script.amazon_reports.ageing_report
     clients:
     - ESH
     - KNC
@@ -69,7 +69,7 @@ reports:
   ledger:
     label: Ledger
     stage: Common Sanity Reports
-    module: report_script.common_sanity_report.ledger_report
+    module: report_script.amazon_reports.ledger_report
     clients:
     - ESH
     - KNC
@@ -78,8 +78,8 @@ reports:
     enabled: true
   manage_fba:
     label: Manage FBA
-    stage: common_sanity_reports
-    module: report_script.common_sanity_report.manage_fba_report
+    stage: amazon_reportss
+    module: report_script.amazon_reports.manage_fba_report
     clients:
     - ESH
     - KNC
@@ -89,7 +89,7 @@ reports:
   reserved:
     label: Reserved
     stage: Common Sanity Reports
-    module: report_script.common_sanity_report.reserved_report
+    module: report_script.amazon_reports.reserved_report
     clients:
     - ESH
     - KNC
@@ -99,7 +99,7 @@ reports:
   order:
     label: Order
     stage: Common Sanity Reports
-    module: report_script.common_sanity_report.orders_report
+    module: report_script.amazon_reports.orders_report
     clients:
     - ESH
     - KNC
@@ -109,7 +109,7 @@ reports:
   inventory_database:
     label: Inventory Database
     stage: Common Sanity Reports
-    module: report_script.common_sanity_report.inventory_database
+    module: report_script.amazon_reports.inventory_database
     clients:
     - ESH
     - KNC

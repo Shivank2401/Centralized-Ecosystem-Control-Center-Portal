@@ -11,8 +11,8 @@ export function normalizeStageKey(stage: string | null | undefined): string {
   const key = raw.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || UNASSIGNED_STAGE_KEY
   // Keep in sync with pipeline_engine.registry.STAGE_ALIASES
   const aliases: Record<string, string> = {
-    common_sanity_reports: 'common',
-    common_sanity_report: 'common',
+    amazon_reportss: 'common',
+    amazon_reports: 'common',
     supply_chain: 'helper_files_nd_saving',
   }
   return aliases[key] ?? key

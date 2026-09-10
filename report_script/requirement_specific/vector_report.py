@@ -35,7 +35,7 @@ from config_manager import cogs_local, layouts, paths as cfg_paths
 from config_manager.loader import load_geographies
 from config_manager.report_helpers import to_snake
 from config_manager.report_helpers import print_script_completed
-from report_script.common_sanity_report.new_sku_check import report_new_skus_vs_cogs
+from report_script.amazon_reports.new_sku_check import report_new_skus_vs_cogs
 
 CLIENT = "ESH"
 PROCESS_GEOS: Optional[List[str]] = None
@@ -1207,7 +1207,7 @@ def build_vector_dataframe(
             geos_order.append(geo)
 
     print(f"\n[{cfg.client_code}] ========== GEO CHECKLISTS (client-wise) ==========")
-    from report_script.common_sanity_report.run_logs import ReportRunLog
+    from report_script.amazon_reports.run_logs import ReportRunLog
 
     run_log = ReportRunLog(cfg.client_code, "vector")
     try:

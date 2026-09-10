@@ -30,7 +30,7 @@ GEO_OPTIONS: List[Tuple[str, str]] = [
 ]
 
 STAGE_PATHS: Dict[str, str] = {
-    "common": "report_script/common_sanity_report",
+    "common": "report_script/amazon_reports",
     "helper_files_nd_saving": "report_script/helper_files_nd_saving",
     "retail": "report_script/retail",
     "finance": "report_script/finance",
@@ -44,8 +44,8 @@ STAGE_PATHS: Dict[str, str] = {
 # Historical / label-derived keys → report_stages keys (and STAGE_PATHS).
 # Reports often store display-ish stage strings; menu keys stay short.
 STAGE_ALIASES: Dict[str, str] = {
-    "common_sanity_reports": "common",
-    "common_sanity_report": "common",
+    "amazon_reportss": "common",
+    "amazon_reports": "common",
     "supply_chain": "helper_files_nd_saving",
 }
 

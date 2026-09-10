@@ -1,6 +1,6 @@
 # Common report run logs
 
-Module: `report_script.common_sanity_report.run_logs`
+Module: `report_script.amazon_reports.run_logs`
 
 After each common (and vector) report run, open a text file instead of scrolling the terminal.
 

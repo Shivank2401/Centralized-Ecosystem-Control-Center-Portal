@@ -10,12 +10,12 @@ Configs resolve `data_root` / `cogs_path` from `.env` via `config_manager.layout
 
 | Report key | Script | Output |
 |------------|--------|--------|
-| manage_fba | `common_sanity_report.manage_fba_report` | `sanity_data/{CLIENT}/manage_fba/` |
-| reserved | `common_sanity_report.reserved_report` | `sanity_data/{CLIENT}/reserved/` |
-| ageing | `common_sanity_report.ageing_report` | `sanity_data/{CLIENT}/ageing/` |
-| ledger | `common_sanity_report.ledger_report` | `sanity_data/{CLIENT}/ledger/` |
-| order | `common_sanity_report.orders_report` | `sanity_data/{CLIENT}/orders/` |
-| inventory_database | `common_sanity_report.inventory_database` | `sanity_data/{CLIENT}/inventory_database/` |
+| manage_fba | `amazon_reports.manage_fba_report` | `sanity_data/{CLIENT}/manage_fba/` |
+| reserved | `amazon_reports.reserved_report` | `sanity_data/{CLIENT}/reserved/` |
+| ageing | `amazon_reports.ageing_report` | `sanity_data/{CLIENT}/ageing/` |
+| ledger | `amazon_reports.ledger_report` | `sanity_data/{CLIENT}/ledger/` |
+| order | `amazon_reports.orders_report` | `sanity_data/{CLIENT}/orders/` |
+| inventory_database | `amazon_reports.inventory_database` | `sanity_data/{CLIENT}/inventory_database/` |
 | item_master | `item_master.item_master_manager` | Azure + local `item_master/` cache |
 | a_meir_finance | `finance.a_meir_finance_report` | Inventory Reconciles + Closing Stock Analyzer |
 | esh_cogs | `want_to_update.esh_cogs` | Azure `thrive-client-ecosoulhome/cogs/` (Excel → blob) |

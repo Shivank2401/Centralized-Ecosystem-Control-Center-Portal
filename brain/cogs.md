@@ -34,7 +34,7 @@ Refresh local copies with **Download COGS** before relying on SKU cleaners.
 Wired through:
 - `esh_sku_cleaning` / `knc_sku_cleaning` (`load_cogs_helper_frame`, `load_sku_mapping`)
 - common sanity reports (ageing, ledger, manage_fba, reserved, orders)
-- `common_sanity_report.new_sku_check`
+- `amazon_reports.new_sku_check`
 - shipping queues (local first, Azure fallback)
 
 ## Azure

@@ -32,7 +32,7 @@ def test_resolve_report_code_case_insensitive():
 def test_normalize_stage_key():
     assert normalize_stage_key("common") == "common"
     assert normalize_stage_key("Common Sanity Reports") == "common"
-    assert normalize_stage_key("common_sanity_reports") == "common"
+    assert normalize_stage_key("amazon_reportss") == "common"
     assert normalize_stage_key("Supply Chain") == "helper_files_nd_saving"
     assert normalize_stage_key("helper_files_nd_saving") == "helper_files_nd_saving"
     assert normalize_stage_key("Retail") == "retail"
@@ -53,7 +53,7 @@ def test_registry_loads_reports():
 
 def test_discovery_manage_fba_exists():
     disc = ReportDiscovery()
-    path = disc.module_file_path("report_script.common_sanity_report.manage_fba_report")
+    path = disc.module_file_path("report_script.amazon_reports.manage_fba_report")
     assert path is not None and path.exists()
 
 

@@ -189,7 +189,7 @@ def check_final_dataframe_new_skus(
 
     When ``run_log`` is a ReportRunLog, the same text is appended for file review.
     """
-    from report_script.common_sanity_report.run_logs import format_new_skus_section
+    from report_script.amazon_reports.run_logs import format_new_skus_section
 
     print(f"\n>>> STEP: new-SKU vs COGS [{str(client).upper()}]" + (f" ({label})" if label else ""))
 
@@ -230,7 +230,7 @@ def check_final_dataframe_new_skus(
         )
     print_new_sku_rollup(client, alerts, label=label)
 
-    from report_script.common_sanity_report.run_logs import export_new_skus_csv
+    from report_script.amazon_reports.run_logs import export_new_skus_csv
 
     csv_path = export_new_skus_csv(
         client,
