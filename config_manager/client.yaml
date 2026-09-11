@@ -18,7 +18,7 @@ clients:
     cogs_path_env: KNC_COGS_PATH
     package: client_knc
     layout: knc
-    geographies: [UK, DE, AE]
+    geographies: [UK, IE, DE, AE]
 
   EMM:
     name: Emami UAE

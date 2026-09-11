@@ -268,15 +268,54 @@ class ConfigManagementService:
         if not create and geo_u not in client_geos:
             raise KeyError(f"Unknown geography: {client_u}/{geo_u}")
 
-        entry = {
-            "country_code": str(body.get("country_code") or geo_u).upper(),
-            "cogs_sheet_name": str(body.get("cogs_sheet_name") or "").strip(),
-            "country_currency": str(body.get("country_currency") or "").strip(),
-            "orders_sales_channel": str(body.get("orders_sales_channel") or "").strip(),
-            "enabled": bool(body.get("enabled", True)),
-        }
-        if not entry["cogs_sheet_name"] or not entry["country_currency"]:
-            raise ValueError("cogs_sheet_name and country_currency are required")
+        # Prefer geo × channel shape; still accept legacy flat fields.
+        channels_body = body.get("channels")
+        if isinstance(channels_body, dict) and channels_body:
+            entry = {
+                "country_code": str(body.get("country_code") or geo_u).upper(),
+                "country_currency": str(body.get("country_currency") or "").strip(),
+                "enabled": bool(body.get("enabled", True)),
+                "default_channel": str(
+                    body.get("default_channel") or body.get("cogs_channel") or "amazon"
+                )
+                .strip()
+                .lower()
+                or "amazon",
+                "channels": channels_body,
+            }
+        else:
+            channel = str(body.get("cogs_channel") or body.get("default_channel") or "amazon").strip().lower() or "amazon"
+            sheet = str(body.get("cogs_sheet_name") or body.get("excel_sheet") or "").strip()
+            orders = str(body.get("orders_sales_channel") or "").strip()
+            entry = {
+                "country_code": str(body.get("country_code") or geo_u).upper(),
+                "country_currency": str(body.get("country_currency") or "").strip(),
+                "enabled": bool(body.get("enabled", True)),
+                "default_channel": channel,
+                "channels": {
+                    channel: {
+                        "excel_sheet": sheet,
+                        "orders_sales_channel": orders,
+                        "markets": body.get("markets") or [],
+                        "vendors": body.get("vendors") or [],
+                    }
+                },
+            }
+            extra = body.get("cogs_channels")
+            if isinstance(extra, dict):
+                for ch_name, excel in extra.items():
+                    key = str(ch_name).strip().lower()
+                    if not key:
+                        continue
+                    entry["channels"].setdefault(
+                        key,
+                        {"excel_sheet": str(excel).strip(), "orders_sales_channel": ""},
+                    )
+
+        if not entry["country_currency"]:
+            raise ValueError("country_currency is required")
+        if not entry.get("channels"):
+            raise ValueError("At least one channel is required under channels:{}")
 
         before = config_io.read_raw("geography.yaml")
         client_geos[geo_u] = entry
@@ -789,23 +828,81 @@ class ConfigManagementService:
         return {str(k).upper(): dict(v) for k, v in raw.items() if isinstance(v, dict)}
 
     def _flat_geographies(self) -> List[Dict[str, Any]]:
+        """List geos via loader so channel metadata matches geography.yaml (geo × channel)."""
+        from config_manager.loader import load_geographies
+
         doc = config_io.load_yaml_file("geography.yaml")
         raw = doc.get("geographies") or {}
-        rows = []
-        for client, geos in raw.items():
-            if not isinstance(geos, dict):
+        rows: List[Dict[str, Any]] = []
+        for client, client_raw in raw.items():
+            if not isinstance(client_raw, dict):
                 continue
-            for code, cfg in geos.items():
+            client_u = str(client).upper()
+            try:
+                geos = load_geographies(client_u)
+            except Exception:
+                geos = {}
+            for code, cfg in client_raw.items():
                 if not isinstance(cfg, dict):
                     continue
+                code_u = str(cfg.get("country_code") or code).upper()
+                parsed = geos.get(code_u)
+                if parsed is not None:
+                    channels = {
+                        name: {
+                            "excel_sheet": ch.excel_sheet,
+                            "orders_sales_channel": ch.orders_sales_channel,
+                            "markets": list(ch.markets),
+                            "vendors": list(ch.vendors),
+                            "cogs_stem": f"{parsed.country_code.lower()}_{ch.name}_cogs",
+                        }
+                        for name, ch in parsed.channels.items()
+                    }
+                    rows.append(
+                        {
+                            "client": client_u,
+                            "country_code": parsed.country_code,
+                            "country_currency": parsed.country_currency,
+                            "enabled": parsed.enabled,
+                            "default_channel": parsed.default_channel,
+                            "channels": channels,
+                            "cogs_sheet_name": parsed.cogs_sheet_name,
+                            "cogs_channel": parsed.default_channel,
+                            "cogs_channels": parsed.cogs_channels,
+                            "orders_sales_channel": parsed.orders_sales_channel,
+                        }
+                    )
+                    continue
+
+                # Disabled / unparsed geo — still show raw YAML channels
+                channels_raw = cfg.get("channels") or {}
+                channels = {}
+                if isinstance(channels_raw, dict):
+                    for ch_name, ch_cfg in channels_raw.items():
+                        if not isinstance(ch_cfg, dict):
+                            continue
+                        key = str(ch_name).strip().lower()
+                        channels[key] = {
+                            "excel_sheet": ch_cfg.get("excel_sheet") or "",
+                            "orders_sales_channel": ch_cfg.get("orders_sales_channel") or "",
+                            "markets": ch_cfg.get("markets") or [],
+                            "vendors": ch_cfg.get("vendors") or [],
+                            "cogs_stem": f"{code_u.lower()}_{key}_cogs",
+                        }
                 rows.append(
                     {
-                        "client": str(client).upper(),
-                        "country_code": str(cfg.get("country_code") or code).upper(),
-                        "cogs_sheet_name": cfg.get("cogs_sheet_name"),
+                        "client": client_u,
+                        "country_code": code_u,
                         "country_currency": cfg.get("country_currency"),
-                        "orders_sales_channel": cfg.get("orders_sales_channel"),
                         "enabled": bool(cfg.get("enabled", True)),
+                        "default_channel": cfg.get("default_channel") or "amazon",
+                        "channels": channels,
+                        "cogs_sheet_name": cfg.get("cogs_sheet_name"),
+                        "cogs_channel": cfg.get("cogs_channel")
+                        or cfg.get("default_channel")
+                        or "amazon",
+                        "cogs_channels": cfg.get("cogs_channels") or {},
+                        "orders_sales_channel": cfg.get("orders_sales_channel"),
                     }
                 )
         rows.sort(key=lambda r: (r["client"], r["country_code"]))

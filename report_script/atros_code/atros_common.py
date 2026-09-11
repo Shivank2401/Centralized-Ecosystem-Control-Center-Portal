@@ -301,26 +301,15 @@ def numeric(series: pd.Series) -> pd.Series:
 # =============================================================================
 
 def read_cogs(geo: str) -> pd.DataFrame:
-    """Load the geo's COGS sheet from KNC_COGS_PATH (or fallback under data root)."""
-    print(f"    [common] reading COGS for {geo}...")
-    configured = paths.env_path("KNC_COGS_PATH", required=False)
-    candidates = [configured] if configured else []
-    candidates.extend(
-        [
-            get_knc_root() / "pnl requirement" / "cogs.xlsx",
-            get_knc_root() / "pnl_requirement" / "cogs.xlsx",
-        ]
-    )
-    cogs_path = next(
-        (candidate for candidate in candidates if candidate and candidate.exists()),
-        None,
-    )
-    if cogs_path is None:
-        raise FileNotFoundError("KNC COGS workbook not found (set KNC_COGS_PATH)")
+    """Load the geo's COGS from local cogs/knc/{geo}_{channel}_cogs.* (geography.yaml)."""
+    from config_manager import cogs_local
 
-    sheet = GEO_CONFIG[geo]["cogs_sheet"]
-    print(f"    [common] COGS file: {cogs_path}  sheet={sheet}")
-    return pd.read_excel(cogs_path, sheet_name=sheet)
+    print(f"    [common] reading local COGS for {geo}...")
+    code = str(geo).strip().upper()
+    df = cogs_local.read_cogs_slice("KNC", code)
+    path = cogs_local.resolve_cogs_slice_path("KNC", code)
+    print(f"    [common] COGS file: {path}")
+    return df
 
 
 def read_bulk_metrics(

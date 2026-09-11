@@ -155,3 +155,59 @@ def esh_pincode_xlsx_path() -> Path:
     if override is not None:
         return override
     return esh_inventory_root() / "dashboard_essential_files" / "pincode.xlsx"
+
+
+def knc_shopify_sales_root(geo: str) -> Path:
+    """
+    KNC Shopify sales export root for a geo (UK / IE).
+
+    Env vars (required when running Shopify orders):
+      KNC_SHOPIFY_UK_SALES_ROOT
+      KNC_SHOPIFY_IE_SALES_ROOT
+    """
+    code = str(geo).strip().upper()
+    var = f"KNC_SHOPIFY_{code}_SALES_ROOT"
+    return env_path(var)  # type: ignore[return-value]
+
+
+def knc_shopify_inventory_root(geo: str) -> Path:
+    """
+    KNC Shopify inventory export root for a geo (UK / IE).
+
+    Env vars (required when running Shopify inventory):
+      KNC_SHOPIFY_UK_INVENTORY_ROOT
+      KNC_SHOPIFY_IE_INVENTORY_ROOT
+
+    Layout (preferred — env points at …/inventory):
+      {ROOT}/inventory_shopify.csv                              # live drop
+      {ROOT}/Year/{YYYY}/{Mon-YYYY}/Shopify_inventory_{stamp}.csv
+    Env may also point directly at …/inventory/Year.
+    """
+    code = str(geo).strip().upper()
+    var = f"KNC_SHOPIFY_{code}_INVENTORY_ROOT"
+    return env_path(var)  # type: ignore[return-value]
+
+
+def knc_shopify_ledger_root(geo: str) -> Path:
+    """
+    KNC Shopify inventory-ledger export root for a geo (UK / IE).
+
+    Env vars (required when running Shopify ledger):
+      KNC_SHOPIFY_UK_LEDGER_ROOT
+      KNC_SHOPIFY_IE_LEDGER_ROOT
+
+    Layout (preferred — env points at …/inventory_ledger):
+      {ROOT}/Month-end inventory snapshot- Current Month.csv   # optional live
+      {ROOT}/Month-end inventory snapshot- Last Month.csv      # optional live
+      {ROOT}/Year/{YYYY}/Inventory ledger_{Mon-YYYY}.csv
+    Env may also point directly at …/inventory_ledger/Year.
+    """
+    code = str(geo).strip().upper()
+    var = f"KNC_SHOPIFY_{code}_LEDGER_ROOT"
+    return env_path(var)  # type: ignore[return-value]
+
+
+def knc_shopify_cogs_csv(geo: str) -> Path:
+    """Local Shopify COGS slice: cogs/knc/{geo}_shopify_cogs.csv"""
+    code = str(geo).strip().lower()
+    return _PROJECT_ROOT / "cogs" / "knc" / f"{code}_shopify_cogs.csv"

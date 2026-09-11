@@ -56,10 +56,24 @@ class ConfigService:
             {
                 "client": g.client,
                 "country_code": g.country_code,
-                "cogs_sheet_name": g.cogs_sheet_name,
                 "country_currency": g.country_currency,
-                "orders_sales_channel": g.orders_sales_channel,
                 "enabled": g.enabled,
+                "default_channel": g.default_channel,
+                "channels": {
+                    name: {
+                        "excel_sheet": ch.excel_sheet,
+                        "orders_sales_channel": ch.orders_sales_channel,
+                        "markets": list(ch.markets),
+                        "vendors": list(ch.vendors),
+                        "cogs_stem": f"{g.country_code.lower()}_{ch.name}_cogs",
+                    }
+                    for name, ch in g.channels.items()
+                },
+                # Backward-compatible flat fields for older UI
+                "cogs_sheet_name": g.cogs_sheet_name,
+                "cogs_channel": g.default_channel,
+                "cogs_channels": g.cogs_channels,
+                "orders_sales_channel": g.orders_sales_channel,
             }
             for g in geos.values()
         ]

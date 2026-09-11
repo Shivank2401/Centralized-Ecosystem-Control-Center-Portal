@@ -79,13 +79,20 @@ class PipelineExecutor:
         except TypeError:
             raw = runner()
         short_name = module_path.rsplit(".", 1)[-1]
-        detail = ""
+        parts: List[str] = []
+        client = kwargs.get("client")
+        if client:
+            parts.append(f"client={client}")
         geos = kwargs.get("geos")
         if isinstance(geos, (list, tuple)) and geos:
-            detail = f"geo={','.join(str(g) for g in geos)}" if len(geos) <= 3 else f"geos={len(geos)}"
+            parts.append(
+                f"geo={','.join(str(g) for g in geos)}"
+                if len(geos) <= 3
+                else f"geos={len(geos)}"
+            )
         elif geos:
-            detail = f"geo={geos}"
-        print_script_completed(short_name, detail=detail)
+            parts.append(f"geo={geos}")
+        print_script_completed(short_name, detail="; ".join(parts))
         return adapt_result(raw)
 
     @staticmethod
@@ -107,7 +114,14 @@ class PipelineExecutor:
             "invalid_skus",
             "utility_codes",
             "download_cogs",
+            # One job per client: script archives ALL geos/platforms by default
+            # (ignores pipeline geo pick). See FORCE_ALL_GEOS in the module.
             "saving_raw_file_on_date",
+            # Shopify stage: one job per client; script filters to channels.shopify geos
+            # (avoids DE/AE/… empty repeats that rewrite UK+IE every time).
+            "shopify_reports.orders_report",
+            "shopify_reports.inventory_shopify",
+            "shopify_reports.ledger_shopify",
             "b_check_duplicate_image",
             "c_convert_json_to_csv",
             "a_import_any_file_to_mysql",
@@ -189,6 +203,21 @@ class PipelineExecutor:
             report_jobs = [j for j in jobs if j[0] == report]
             if not report_jobs:
                 self._log(f"  [skip] {report}: no matching client/geo jobs", run_id)
+            else:
+                matched_clients = {j[2] for j in report_jobs}
+                for client in clients:
+                    if client in matched_clients:
+                        continue
+                    if not self.registry.matches_clients(meta, [client]):
+                        self._log(
+                            f"  [skip] {client} / {report}: not configured for this client",
+                            run_id,
+                        )
+                    else:
+                        self._log(
+                            f"  [skip] {client} / {report}: no overlapping geographies",
+                            run_id,
+                        )
 
             for _report_key, job_meta, client, geo_batch in report_jobs:
                 if run_id and self.track_runs and self.run_manager.is_cancel_requested(run_id):

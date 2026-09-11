@@ -105,7 +105,7 @@ Priority: **ETL stability > abstraction > API > frontend > automation**
 | Risk | Mitigation |
 |------|------------|
 | Breaking CLI | Menus unchanged; thin executor wrapper; smoke-test flags |
-| Stage label vs key mismatch (`Common Sanity Reports` vs `common`) | Centralize `normalize_stage_key` |
+| Stage label vs key mismatch (`Amazon Reports` / legacy `Common Sanity Reports` vs `common`) | Centralize `normalize_stage_key` |
 | Concurrent file access | One active run (Phase 3+) |
 | Uploaded Python (later) | AST-only validate; subprocess isolation |
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import yaml
 
@@ -25,6 +25,7 @@ GEO_OPTIONS: List[Tuple[str, str]] = [
     ("CA", "CA"),
     ("DE", "DE"),
     ("UK", "UK"),
+    ("IE", "IE"),
     ("IN", "IN"),
     ("AE", "AE"),
 ]
@@ -39,13 +40,16 @@ STAGE_PATHS: Dict[str, str] = {
     "utility_codes": "report_script/utility_codes",
     "atros": "report_script/atros_code",
     "item_master": "report_script/item_master",
+    "shopify_reports": "report_script/shopify_reports",
 }
 
 # Historical / label-derived keys → report_stages keys (and STAGE_PATHS).
 # Reports often store display-ish stage strings; menu keys stay short.
 STAGE_ALIASES: Dict[str, str] = {
-    "amazon_reportss": "common",
     "amazon_reports": "common",
+    "amazon_reportss": "common",  # legacy typo
+    "common_sanity_reports": "common",  # legacy folder/label
+    "common_sanity_report": "common",
     "supply_chain": "helper_files_nd_saving",
 }
 
@@ -99,7 +103,27 @@ class ConfigRegistry:
         return load_geographies(client)
 
     def all_geo_codes(self) -> List[str]:
-        return [code for code, _ in GEO_OPTIONS]
+        """
+        Union of geography codes from geography.yaml (all clients),
+        ordered with GEO_OPTIONS first then any extras (e.g. IE).
+        """
+        from config_manager.loader import _load_yaml
+
+        codes: Set[str] = set()
+        try:
+            raw = (_load_yaml("geography.yaml").get("geographies") or {})
+            for client_geos in raw.values():
+                if isinstance(client_geos, dict):
+                    codes.update(str(g).strip().upper() for g in client_geos.keys())
+        except Exception:
+            codes = set()
+        if not codes:
+            return [code for code, _ in GEO_OPTIONS]
+        ordered = [code for code, _ in GEO_OPTIONS if code in codes]
+        for code in sorted(codes):
+            if code not in ordered:
+                ordered.append(code)
+        return ordered
 
     def reports_config(self) -> Dict[str, Any]:
         return self._reports_raw

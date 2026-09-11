@@ -100,8 +100,8 @@ def _mapped_frame_skus(
 # COGS sheet SKUs
 # =============================================================================
 
-def cogs_sheet_skus(client: str, geography_code: str, channel: str = "amazon") -> Set[str]:
-    """SKU values from that client/geo COGS sheet only (the `sku` column)."""
+def cogs_sheet_skus(client: str, geography_code: str, channel: Optional[str] = None) -> Set[str]:
+    """SKU values from that client/geo local COGS slice (the `sku` column)."""
     try:
         path = cogs_local.resolve_cogs_slice_path(client, geography_code, channel=channel)
     except FileNotFoundError as exc:

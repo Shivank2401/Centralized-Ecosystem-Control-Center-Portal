@@ -4,9 +4,9 @@ Load client / geography / report YAML configs and resolve env-based paths.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
 
@@ -22,6 +22,17 @@ def _load_yaml(name: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"Expected mapping in {path}, got {type(data)}")
     return data
+
+
+def _as_str_list(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",")]
+        return tuple(p for p in parts if p)
+    if isinstance(value, (list, tuple)):
+        return tuple(str(x).strip() for x in value if str(x).strip())
+    return (str(value).strip(),) if str(value).strip() else ()
 
 
 @dataclass(frozen=True)
@@ -42,17 +53,132 @@ class ClientConfig:
 
     @property
     def cogs_path(self) -> Path:
+        """Legacy Excel workbook path (want_to_update upload only). Reports use cogs_local."""
         return paths.env_path(self.cogs_path_env)  # type: ignore[return-value]
 
 
 @dataclass(frozen=True)
+class ChannelConfig:
+    """One sales/platform channel under a geography (amazon, shopify, …)."""
+
+    name: str
+    # Optional Excel sheet for want_to_update upload only (not used by report COGS reads)
+    excel_sheet: str = ""
+    # Amazon-style sales-channel filter
+    orders_sales_channel: str = ""
+    # Shopify Market + Product vendor filters
+    markets: Tuple[str, ...] = ()
+    vendors: Tuple[str, ...] = ()
+
+    @property
+    def cogs_stem(self) -> str:
+        """Local file stem segment: always the channel name (uk_amazon_cogs, uk_shopify_cogs)."""
+        return self.name.strip().lower()
+
+
+@dataclass(frozen=True)
 class GeographyConfig:
+    """
+    One geography for a client; may host multiple channels.
+
+    Local COGS path for channel C:
+      cogs/{client}/{geo}_{C}_cogs.parquet|.csv
+    """
+
     client: str
     country_code: str
-    cogs_sheet_name: str
     country_currency: str
-    orders_sales_channel: str
     enabled: bool = True
+    default_channel: str = "amazon"
+    channels: Dict[str, ChannelConfig] = field(default_factory=dict)
+
+    def channel(self, name: Optional[str] = None) -> ChannelConfig:
+        key = str(name or self.default_channel).strip().lower() or self.default_channel
+        if key not in self.channels:
+            known = ", ".join(sorted(self.channels)) or "(none)"
+            raise KeyError(
+                f"No channel '{key}' for {self.client}/{self.country_code}. Known: {known}"
+            )
+        return self.channels[key]
+
+    def has_channel(self, name: str) -> bool:
+        return str(name).strip().lower() in self.channels
+
+    # --- Backward-compatible accessors (amazon reports / older UI) ---
+
+    @property
+    def cogs_channel(self) -> str:
+        return self.default_channel
+
+    @property
+    def cogs_sheet_name(self) -> str:
+        try:
+            return self.channel(self.default_channel).excel_sheet
+        except KeyError:
+            if not self.channels:
+                return ""
+            return next(iter(self.channels.values())).excel_sheet
+
+    @property
+    def orders_sales_channel(self) -> str:
+        """Default-channel Amazon sales-channel (or first channel that has one)."""
+        try:
+            ch = self.channel(self.default_channel)
+            if ch.orders_sales_channel:
+                return ch.orders_sales_channel
+        except KeyError:
+            pass
+        for ch in self.channels.values():
+            if ch.orders_sales_channel:
+                return ch.orders_sales_channel
+        return ""
+
+    @property
+    def cogs_channels(self) -> Dict[str, str]:
+        """channel → excel_sheet (upload mapping only)."""
+        return {k: v.excel_sheet for k, v in self.channels.items() if v.excel_sheet}
+
+
+def _parse_channel(name: str, raw: Dict[str, Any]) -> ChannelConfig:
+    orders = raw.get("orders_sales_channel") or ""
+    if isinstance(orders, list):
+        orders = ", ".join(str(x).strip() for x in orders if str(x).strip())
+    return ChannelConfig(
+        name=str(name).strip().lower(),
+        excel_sheet=str(raw.get("excel_sheet") or raw.get("cogs_sheet_name") or "").strip(),
+        orders_sales_channel=str(orders).strip(),
+        markets=_as_str_list(raw.get("markets")),
+        vendors=_as_str_list(raw.get("vendors")),
+    )
+
+
+def _legacy_channels_from_flat(cfg: Dict[str, Any]) -> Dict[str, ChannelConfig]:
+    """Support old flat geography keys during transition."""
+    channel = str(cfg.get("cogs_channel") or "amazon").strip().lower() or "amazon"
+    sheet = str(cfg.get("cogs_sheet_name") or "").strip()
+    orders = cfg.get("orders_sales_channel") or ""
+    if isinstance(orders, list):
+        orders = ", ".join(str(x).strip() for x in orders if str(x).strip())
+    channels: Dict[str, ChannelConfig] = {
+        channel: ChannelConfig(
+            name=channel,
+            excel_sheet=sheet,
+            orders_sales_channel=str(orders).strip(),
+        )
+    }
+    extra = cfg.get("cogs_channels") or {}
+    if isinstance(extra, dict):
+        for ch_name, excel in extra.items():
+            key = str(ch_name).strip().lower()
+            if not key:
+                continue
+            if key in channels:
+                continue
+            channels[key] = ChannelConfig(
+                name=key,
+                excel_sheet=str(excel).strip(),
+            )
+    return channels
 
 
 def load_clients() -> Dict[str, ClientConfig]:
@@ -80,15 +206,39 @@ def load_geographies(client: str) -> Dict[str, GeographyConfig]:
     raw = _load_yaml("geography.yaml").get("geographies", {}).get(client, {})
     out: Dict[str, GeographyConfig] = {}
     for code, cfg in raw.items():
+        if not isinstance(cfg, dict):
+            continue
         if not cfg.get("enabled", True):
             continue
+
+        channels_raw = cfg.get("channels")
+        channels: Dict[str, ChannelConfig] = {}
+        if isinstance(channels_raw, dict) and channels_raw:
+            for ch_name, ch_cfg in channels_raw.items():
+                if not isinstance(ch_cfg, dict):
+                    continue
+                parsed = _parse_channel(str(ch_name), ch_cfg)
+                channels[parsed.name] = parsed
+        else:
+            channels = _legacy_channels_from_flat(cfg)
+
+        default_channel = str(cfg.get("default_channel") or "").strip().lower()
+        if not default_channel:
+            default_channel = (
+                "amazon"
+                if "amazon" in channels
+                else (next(iter(channels)) if channels else "amazon")
+            )
+        if default_channel not in channels and channels:
+            default_channel = next(iter(channels))
+
         out[code.upper()] = GeographyConfig(
             client=client,
-            country_code=cfg.get("country_code", code).upper(),
-            cogs_sheet_name=cfg["cogs_sheet_name"],
-            country_currency=cfg["country_currency"],
-            orders_sales_channel=cfg["orders_sales_channel"],
+            country_code=str(cfg.get("country_code", code)).upper(),
+            country_currency=str(cfg["country_currency"]).strip(),
             enabled=bool(cfg.get("enabled", True)),
+            default_channel=default_channel,
+            channels=channels,
         )
     return out
 

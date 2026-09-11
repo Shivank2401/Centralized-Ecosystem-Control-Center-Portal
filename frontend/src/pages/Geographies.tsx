@@ -53,8 +53,8 @@ export function GeographiesPage() {
                 <tr>
                   <th className="px-5 py-3">Geo</th>
                   <th className="px-5 py-3">Currency</th>
-                  <th className="px-5 py-3">Sales channel</th>
-                  <th className="px-5 py-3">COGS sheet</th>
+                  <th className="px-5 py-3">Channels / COGS stem</th>
+                  <th className="px-5 py-3">Default sales channel</th>
                   <th className="px-5 py-3">Status</th>
                 </tr>
               </thead>
@@ -63,8 +63,16 @@ export function GeographiesPage() {
                   <tr key={g.country_code}>
                     <td className="px-5 py-3 font-mono font-semibold">{g.country_code}</td>
                     <td className="px-5 py-3">{g.country_currency}</td>
-                    <td className="px-5 py-3 text-[var(--fg-muted)]">{g.orders_sales_channel}</td>
-                    <td className="px-5 py-3 font-mono text-xs">{g.cogs_sheet_name}</td>
+                    <td className="px-5 py-3 font-mono text-[11px] text-[var(--fg-muted)]">
+                      {Object.keys(g.channels ?? {}).length
+                        ? Object.entries(g.channels ?? {})
+                            .map(([n, ch]) => `${n}→${ch.cogs_stem || n}`)
+                            .join(', ')
+                        : g.cogs_sheet_name || '—'}
+                    </td>
+                    <td className="px-5 py-3 text-[var(--fg-muted)]">
+                      {g.orders_sales_channel || '—'}
+                    </td>
                     <td className="px-5 py-3">
                       <Badge tone={g.enabled ? 'ok' : 'warn'}>
                         {g.enabled ? 'enabled' : 'disabled'}

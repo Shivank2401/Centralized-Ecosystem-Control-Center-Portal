@@ -1,10 +1,11 @@
 """
-Client-aware Amazon Reserved Inventory combiner.
+Client-aware Amazon Manage FBA Inventory combiner.
 
 Covers:
   - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
-  - Source: reserved_inventory folders; coalesce header aliases; pivot reserved qty/FC cols
-  - Outputs: sanity_data/{CLIENT}/reserved/{GEO}_reserved_inventory.parquet|.csv
+  - Source: manage_fba_inventory year-month folders; pivot AFN qty columns
+  - No FC-transfer col for ESH AE/IN and KNC AE; KNC AE filters Title "Kinetica"
+  - Outputs: sanity_data/{CLIENT}/manage_fba/{GEO}_manage_fba_inventory.parquet|.csv
 
 Adding a NEW client (no ETL changes needed):
   1. Add client + geos in client.yaml / geography.yaml / layouts.py
@@ -14,9 +15,9 @@ Adding a NEW client (no ETL changes needed):
 Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
 
 Run:
-    python report_script/amazon_reports/reserved_report.py
-    python report_script/amazon_reports/reserved_report.py --client ESH
-    python report_script/amazon_reports/reserved_report.py --client KNC --geos UK,DE,AE
+    python report_script/amazon_reports/manage_fba_report.py
+    python report_script/amazon_reports/manage_fba_report.py --client ESH
+    python report_script/amazon_reports/manage_fba_report.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-import numpy as np
 import pandas as pd
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -56,73 +56,87 @@ from report_script.amazon_reports.run_logs import ReportRunLog
 
 
 # =============================================================================
-# Run knobs
+# Run knobs (defaults; CLI / pipeline can override)
 # =============================================================================
 
 CLIENT = "ESH"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
 
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
-PROCESS_YEARS: Optional[List[str]] = ["2026"]
-PROCESS_MONTHS: Optional[List[str]] = None
+PROCESS_YEARS: Optional[List[str]] = [ "2026"]
+PROCESS_MONTHS: Optional[List[str]] = None  # e.g. ["jul"], ["Jul-2026"], ["apr"]
 
 SAVE_OUTPUT = True
 APPLY_TRANSFORM = True
 MERGE_WITH_EXISTING = True
 
-PARQUET_NAME_SUFFIX = "reserved_inventory"
+PARQUET_NAME_SUFFIX = "manage_fba_inventory"
 DEDUPE_SUBSET = ["client", "geography", "date", "sku"]
 
-# Alternate headers seen in older / regional / KNC renamed reserved reports.
-COLUMN_ALIASES: Dict[str, List[str]] = {
-    "sku": ["SKU"],
-    "reserved_qty": ["Amazon Reserved", "amazon_reserved"],
-    "reserved_customerorders": ["Customer_reserved", "customer_reserved"],
-    "reserved_fc-transfers": ["FC_Transfer", "fc_transfer", "fc-transfer"],
-    "reserved_fc-processing": ["FC_Processing", "fc_processing"],
-}
-
-BASE_PIVOT_VALUES = [
-    "reserved_qty",
-    "reserved_customer_orders",
-    "reserved_fc_processing",
+KEEP_COLS = [
+    "sku",
+    "date",
+    "afn-warehouse-quantity",
+    "afn-fulfillable-quantity",
+    "afn-unsellable-quantity",
+    "afn-reserved-quantity",
+    "afn-total-quantity",
+    "afn-inbound-working-quantity",
+    "afn-inbound-shipped-quantity",
+    "afn-inbound-receiving-quantity",
+    "afn-researching-quantity",
+    "afn-reserved-future-supply",
+    "afn-future-supply-buyable",
 ]
 
-FC_TRANSFERS_RAW = "reserved_fc-transfers"
-FC_TRANSFERS_SNAKE = "reserved_fc_transfers"
+PIVOT_VALUES = [
+    "afn_warehouse_quantity",
+    "afn_fulfillable_quantity",
+    "afn_unsellable_quantity",
+    "afn_reserved_quantity",
+    "afn_total_quantity",
+    "afn_inbound_working_quantity",
+    "afn_inbound_shipped_quantity",
+    "afn_inbound_receiving_quantity",
+    "afn_researching_quantity",
+    "afn_reserved_future_supply",
+    "afn_future_supply_buyable",
+]
 
-# Markets that historically kept FC transfers longer (docs only — we keep for all).
-KEEP_FC_TRANSFERS_ALWAYS = {"AE", "IN"}
+FC_TRANSFER_COL = "afn-fc-transfer-quantity"
+FC_TRANSFER_SNAKE = "afn_fc_transfer_quantity"
 
 
 # =============================================================================
 # Client configuration
-#   New client = copy a builder + register in CLIENT_CONFIGS.
-#   Fill geo_roots (KNC-style) OR geo_folders + relative_inventory_path (ESH-style).
+#   New client = copy one of the builders below + register in CLIENT_CONFIGS.
+#   layout "esh" → geo_folders + relative_inventory_path under data_root
+#   layout "knc" → geo_roots from layouts.knc_geo_roots(...)
 # =============================================================================
 
 @dataclass
-class ClientReservedConfig:
+class ClientManageFbaConfig:
     client_code: str
     client_id: str
     client_name: str
     base_path: Path
-    layout: str
-    geo_folders: Dict[str, str] = field(default_factory=dict)
-    geo_roots: Dict[str, Path] = field(default_factory=dict)
+    layout: str  # "esh" | "knc" (or any layout that fills geo_folders / geo_roots)
+    geo_folders: Dict[str, str] = field(default_factory=dict)  # folder -> code (ESH-style)
+    geo_roots: Dict[str, Path] = field(default_factory=dict)  # code -> manage root (KNC-style)
     cogs_path: Path = field(default_factory=Path)
     cogs_sheets: Dict[str, str] = field(default_factory=dict)
-    sku_backend: str = "esh"
+    sku_backend: str = "esh"  # "esh" | "knc" (SKU cleaner module)
     product_name_contains: Dict[str, str] = field(default_factory=dict)
     sku_source_by_geo: Dict[str, str] = field(default_factory=dict)
+    no_fc_transfer_geos: Set[str] = field(default_factory=set)
     relative_inventory_path: Path = field(
-        default_factory=lambda: Path("input") / "amazon" / "reserved_inventory"
+        default_factory=lambda: Path("input") / "amazon" / "manage_fba_inventory"
     )
 
 
-def _esh_config() -> ClientReservedConfig:
+def _esh_config() -> ClientManageFbaConfig:
     ident = layouts.client_identity("ESH")
-    return ClientReservedConfig(
+    return ClientManageFbaConfig(
         client_code=ident["client_code"],
         client_id=ident["client_id"],
         client_name=ident["client_name"],
@@ -130,36 +144,39 @@ def _esh_config() -> ClientReservedConfig:
         layout=ident["layout"],
         geo_folders=dict(layouts.ESH_GEO_FOLDERS),
         cogs_path=layouts.cogs_path("ESH"),
-        cogs_sheets=layouts.cogs_sheets_for("ESH"),
+        cogs_sheets=layouts.cogs_sheets_for("ESH", channel="amazon"),
         sku_backend="esh",
+        no_fc_transfer_geos={"AE", "IN"},
     )
 
 
-def _knc_config() -> ClientReservedConfig:
+def _knc_config() -> ClientManageFbaConfig:
     ident = layouts.client_identity("KNC")
     base = layouts.data_root("KNC")
-    return ClientReservedConfig(
+    return ClientManageFbaConfig(
         client_code=ident["client_code"],
         client_id=ident["client_id"],
         client_name=ident["client_name"],
         base_path=base,
         layout=ident["layout"],
-        geo_roots=layouts.knc_geo_roots("reserved", base),
+        geo_roots=layouts.knc_geo_roots("manage_fba", base),
         cogs_path=layouts.cogs_path("KNC"),
-        cogs_sheets=layouts.cogs_sheets_for("KNC"),
+        cogs_sheets=layouts.cogs_sheets_for("KNC", channel="amazon"),
         sku_backend="knc",
         product_name_contains={"AE": "Kinetica"},
         sku_source_by_geo={"AE": "amazon_ae"},
+        no_fc_transfer_geos={"AE"},
     )
 
 
-CLIENT_CONFIGS: Dict[str, Callable[[], ClientReservedConfig]] = {
+# Register clients here — only place to touch for a new client in this script.
+CLIENT_CONFIGS: Dict[str, Callable[[], ClientManageFbaConfig]] = {
     "ESH": _esh_config,
     "KNC": _knc_config,
 }
 
 
-def get_client_config(client: str) -> ClientReservedConfig:
+def get_client_config(client: str) -> ClientManageFbaConfig:
     key = str(client).strip().upper()
     if key not in CLIENT_CONFIGS:
         known = ", ".join(sorted(CLIENT_CONFIGS))
@@ -168,10 +185,10 @@ def get_client_config(client: str) -> ClientReservedConfig:
 
 
 def output_dir_for(client_code: str) -> Path:
-    return paths.sanity_data_root() / client_code.upper() / "reserved"
+    return paths.sanity_data_root() / client_code.upper() / "manage_fba"
 
 
-def geo_code_label(geography: str, cfg: ClientReservedConfig) -> str:
+def geo_code_label(geography: str, cfg: ClientManageFbaConfig) -> str:
     g = str(geography).strip()
     upper = g.upper()
     for code in cfg.cogs_sheets:
@@ -185,11 +202,11 @@ def geo_code_label(geography: str, cfg: ClientReservedConfig) -> str:
 
 
 # =============================================================================
-# SKU / COGS
+# SKU / COGS helpers (backend chosen by cfg.sku_backend)
 # =============================================================================
 
 def load_client_sku_mapping(
-    cfg: ClientReservedConfig,
+    cfg: ClientManageFbaConfig,
     geography_code: Optional[str] = None,
 ) -> dict:
     geos = [geography_code] if geography_code else list(cfg.cogs_sheets.keys())
@@ -200,7 +217,7 @@ def load_client_sku_mapping(
 
 def clean_client_skus(
     df: pd.DataFrame,
-    cfg: ClientReservedConfig,
+    cfg: ClientManageFbaConfig,
     geography_code: str,
     sku_mapping: Optional[dict] = None,
 ) -> pd.DataFrame:
@@ -214,15 +231,41 @@ def clean_client_skus(
     )
 
 
+def keep_cols_for(geography_code: str, cfg: ClientManageFbaConfig) -> List[str]:
+    cols = list(KEEP_COLS)
+    if geography_code not in cfg.no_fc_transfer_geos:
+        if "afn-reserved-quantity" in cols:
+            idx = cols.index("afn-reserved-quantity") + 1
+            cols.insert(idx, FC_TRANSFER_COL)
+        else:
+            cols.append(FC_TRANSFER_COL)
+    return cols
+
+
+def pivot_values_for(geography_code: str, cfg: ClientManageFbaConfig) -> List[str]:
+    cols = list(PIVOT_VALUES)
+    if geography_code not in cfg.no_fc_transfer_geos:
+        if "afn_reserved_quantity" in cols:
+            idx = cols.index("afn_reserved_quantity") + 1
+            cols.insert(idx, FC_TRANSFER_SNAKE)
+        else:
+            cols.append(FC_TRANSFER_SNAKE)
+    return cols
+
+
 # =============================================================================
 # Discovery / IO
 # =============================================================================
 
 def resolve_geo_targets(
-    cfg: ClientReservedConfig,
+    cfg: ClientManageFbaConfig,
     geos: Optional[Sequence[str]] = None,
 ) -> List[Tuple[str, Path]]:
-    """Prefer geo_roots when set; else geo_folders + relative_inventory_path."""
+    """
+    Build (geo_code, inventory_root) list from client config.
+    - If geo_roots filled → use those (KNC-style)
+    - Else use geo_folders + relative_inventory_path (ESH-style)
+    """
     wanted: Optional[Set[str]] = None
     if geos is not None:
         wanted = {str(g).strip().upper() for g in geos}
@@ -234,7 +277,7 @@ def resolve_geo_targets(
             if wanted is not None and code.upper() not in wanted:
                 continue
             if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Reserved path missing: {root}")
+                print(f"[WARN] [{cfg.client_code}] Manage FBA path missing: {root}")
                 continue
             targets.append((code, root))
     else:
@@ -243,7 +286,7 @@ def resolve_geo_targets(
                 continue
             root = cfg.base_path / folder / cfg.relative_inventory_path
             if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Reserved path missing: {root}")
+                print(f"[WARN] [{cfg.client_code}] Manage FBA path missing: {root}")
                 continue
             targets.append((code, root))
 
@@ -271,7 +314,8 @@ def is_ignored_file(file_path: Path) -> bool:
         return True
     if any(name.startswith(prefix) for prefix in IGNORE_FILE_PREFIXES):
         return True
-    if lower in {"reserved_inventory.csv", "reserved.csv"}:
+    # Skip undated landing files
+    if lower in {"manage_fba_inventory.csv", "manage_fba.csv"}:
         return True
     return False
 
@@ -296,10 +340,14 @@ def _month_filter_tokens(months: Optional[Sequence[str]]) -> Optional[Set[str]]:
     return tokens
 
 
-def discover_reserved_files(
+def discover_manage_fba_files(
     year_path: Path,
     months: Optional[Sequence[str]] = None,
 ) -> List[Path]:
+    """
+    Recursively find manage-FBA files under a year folder.
+    Supports ESH Mon-YYYY folders and KNC apr/may (or flat) layouts.
+    """
     if not year_path.is_dir():
         return []
 
@@ -386,7 +434,8 @@ def _extract_date(df: pd.DataFrame) -> pd.Series:
             break
     if source_col is None:
         for c in df.columns:
-            if to_snake(_clean_col(c)) in {"source_file", "source_name"}:
+            cleaned = to_snake(_clean_col(c))
+            if cleaned in {"source_file", "source_name"}:
                 source_col = c
                 break
     if source_col is None:
@@ -402,150 +451,95 @@ def _extract_date(df: pd.DataFrame) -> pd.Series:
     )
 
 
-def _ensure_column(df: pd.DataFrame, name: str) -> None:
-    if name not in df.columns:
-        df[name] = np.nan
-
-
-def coalesce_reserved_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Unify alternate reserved headers into canonical Amazon names."""
-    out = df.copy()
-    for target, alternates in COLUMN_ALIASES.items():
-        _ensure_column(out, target)
-        for alt in alternates:
-            if alt not in out.columns:
-                continue
-            out[target] = np.where(out[target].isna(), out[alt], out[target])
-
-    if "reserved_customerorders" in out.columns:
-        out = out.rename(
-            columns={"reserved_customerorders": "reserved_customer_orders"}
-        )
-    return out
-
-
-def pivot_values_for() -> List[str]:
-    cols = list(BASE_PIVOT_VALUES)
-    if FC_TRANSFERS_SNAKE not in cols:
-        if "reserved_customer_orders" in cols:
-            idx = cols.index("reserved_customer_orders") + 1
-            cols.insert(idx, FC_TRANSFERS_SNAKE)
-        else:
-            cols.append(FC_TRANSFERS_SNAKE)
-    return cols
-
-
 def transform_geography_frame(
     geo_df: pd.DataFrame,
-    cfg: ClientReservedConfig,
+    cfg: ClientManageFbaConfig,
     geography_code: str,
     sku_mapping: Optional[dict] = None,
 ) -> pd.DataFrame:
     if geo_df.empty:
         return pd.DataFrame()
 
-    reserved_fba = _normalize_headers(geo_df)
-    reserved_fba["date"] = _extract_date(reserved_fba)
+    manage_fba = _normalize_headers(geo_df)
+    manage_fba["date"] = _extract_date(manage_fba)
 
     # Optional product-name filter (e.g. KNC AE → "Kinetica")
     needle = cfg.product_name_contains.get(geography_code)
     if needle:
         name_col = None
         for cand in ("product-name", "product_name", "Product Name"):
-            matches = [
-                c for c in reserved_fba.columns if str(c).strip().lower() == cand.lower()
-            ]
+            matches = [c for c in manage_fba.columns if str(c).strip().lower() == cand.lower()]
             if matches:
                 name_col = matches[0]
                 break
         if name_col is None:
-            for c in reserved_fba.columns:
+            for c in manage_fba.columns:
                 if to_snake(_clean_col(c)) == "product_name":
                     name_col = c
                     break
         if name_col:
-            before = len(reserved_fba)
-            reserved_fba = reserved_fba[
-                reserved_fba[name_col]
-                .astype(str)
-                .str.contains(needle, case=False, na=False)
+            before = len(manage_fba)
+            manage_fba = manage_fba[
+                manage_fba[name_col].astype(str).str.contains(needle, case=False, na=False)
             ].copy()
             print(
                 f"  [{geography_code}] product_name filter '{needle}': "
-                f"{before:,} -> {len(reserved_fba):,}"
+                f"{before:,} -> {len(manage_fba):,}"
             )
 
-    reserved_fba = coalesce_reserved_columns(reserved_fba)
-
-    if FC_TRANSFERS_RAW not in reserved_fba.columns:
-        reserved_fba[FC_TRANSFERS_RAW] = 0
-        note = (
-            "always-keep market"
-            if geography_code in KEEP_FC_TRANSFERS_ALWAYS
-            else "Jul+ schema / KNC rename"
+    if "condition" in manage_fba.columns:
+        manage_fba = manage_fba.drop(
+            manage_fba[manage_fba["condition"] == "Unknown"].index
         )
-        print(f"  [{geography_code}] Note: {FC_TRANSFERS_RAW} missing ({note}) — filled with 0")
-    else:
-        reserved_fba[FC_TRANSFERS_RAW] = pd.to_numeric(
-            reserved_fba[FC_TRANSFERS_RAW], errors="coerce"
-        ).fillna(0)
+    if "mfn-listing-exists" in manage_fba.columns:
+        manage_fba = manage_fba.drop(
+            manage_fba[manage_fba["mfn-listing-exists"] == "Yes"].index
+        )
 
-    reserved_fba["geography"] = geography_code
+    keep_cols = keep_cols_for(geography_code, cfg)
 
-    keep_raw = [
-        "geography",
-        "sku",
-        "date",
-        "reserved_qty",
-        "reserved_customer_orders",
-        FC_TRANSFERS_RAW,
-        "reserved_fc-processing",
-    ]
-    for col in keep_raw:
-        if col not in reserved_fba.columns:
-            if col in {
-                FC_TRANSFERS_RAW,
-                "reserved_fc-processing",
-                "reserved_qty",
-                "reserved_customer_orders",
-            }:
-                reserved_fba[col] = 0
-            elif col == "sku":
-                reserved_fba[col] = np.nan
-            else:
-                raise KeyError(f"Missing columns for {geography_code}: {[col]}")
+    if geography_code not in cfg.no_fc_transfer_geos:
+        if FC_TRANSFER_COL not in manage_fba.columns:
+            manage_fba[FC_TRANSFER_COL] = 0
+            print(f"  [{geography_code}] Note: {FC_TRANSFER_COL} missing — filled with 0")
+        else:
+            manage_fba[FC_TRANSFER_COL] = pd.to_numeric(
+                manage_fba[FC_TRANSFER_COL], errors="coerce"
+            ).fillna(0)
+    elif FC_TRANSFER_COL in manage_fba.columns:
+        manage_fba = manage_fba.drop(columns=[FC_TRANSFER_COL])
 
-    reserved_fba = reserved_fba.loc[:, keep_raw]
-    reserved_fba.columns = [
-        c if c == "geography" else to_snake(c) for c in reserved_fba.columns
+    manage_fba["geography"] = geography_code
+
+    missing = [c for c in keep_cols if c not in manage_fba.columns]
+    if missing:
+        raise KeyError(f"Missing columns for {geography_code}: {missing}")
+
+    select_cols = ["geography"] + [c for c in keep_cols if c != "geography"]
+    manage_fba = manage_fba.loc[:, select_cols]
+    manage_fba.columns = [
+        "geography" if c == "geography" else to_snake(c) for c in manage_fba.columns
     ]
 
-    for col in [
-        "reserved_qty",
-        "reserved_customer_orders",
-        FC_TRANSFERS_SNAKE,
-        "reserved_fc_processing",
-    ]:
-        if col in reserved_fba.columns:
-            reserved_fba[col] = pd.to_numeric(reserved_fba[col], errors="coerce").fillna(0)
-
-    reserved_fba["sku"] = reserved_fba["sku"].astype(str).str.replace(
+    manage_fba["sku"] = manage_fba["sku"].astype(str).str.replace(
         r"-{1,2}$", "", regex=True
     )
 
     if sku_mapping is None:
         sku_mapping = load_client_sku_mapping(cfg, geography_code)
 
-    reserved_fba = clean_client_skus(
-        reserved_fba, cfg, geography_code, sku_mapping=sku_mapping
+    manage_fba = clean_client_skus(
+        manage_fba, cfg, geography_code, sku_mapping=sku_mapping
     )
-    reserved_fba = reserved_fba.dropna(subset=["sku"])
-    reserved_fba = reserved_fba.drop_duplicates().reset_index(drop=True)
+    manage_fba = manage_fba.dropna(subset=["sku"])
+    manage_fba = manage_fba.drop_duplicates().reset_index(drop=True)
 
-    value_cols = [c for c in pivot_values_for() if c in reserved_fba.columns]
-    reserved_fba = (
+    value_cols = [
+        c for c in pivot_values_for(geography_code, cfg) if c in manage_fba.columns
+    ]
+    manage_fba = (
         pd.pivot_table(
-            reserved_fba,
+            manage_fba,
             index=["geography", "date", "sku"],
             values=value_cols,
             aggfunc="sum",
@@ -553,18 +547,18 @@ def transform_geography_frame(
         .reset_index()
     )
 
-    reserved_fba["client"] = cfg.client_code
-    reserved_fba["client_id"] = cfg.client_id
-    reserved_fba["platform"] = "amazon"
+    manage_fba["client"] = cfg.client_code
+    manage_fba["client_id"] = cfg.client_id
+    manage_fba["platform"] = "amazon"
 
     front = ["client", "client_id", "geography", "platform", "date", "sku"]
-    rest = [c for c in reserved_fba.columns if c not in front]
-    return reserved_fba.loc[:, front + rest]
+    rest = [c for c in manage_fba.columns if c not in front]
+    return manage_fba.loc[:, front + rest]
 
 
-def transform_reserved(
+def transform_manage_fba(
     raw_df: pd.DataFrame,
-    cfg: ClientReservedConfig,
+    cfg: ClientManageFbaConfig,
 ) -> pd.DataFrame:
     if raw_df.empty:
         return pd.DataFrame()
@@ -602,7 +596,7 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\n>>> STEP: save per-geography reserved → {output_dir}")
+    print(f"\n>>> STEP: save per-geography manage FBA → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
@@ -631,7 +625,7 @@ def process_year_folder(
 ) -> List[pd.DataFrame]:
     client = str(client_code).strip().upper() or "?"
     frames: List[pd.DataFrame] = []
-    for file_path in discover_reserved_files(year_path, months=months):
+    for file_path in discover_manage_fba_files(year_path, months=months):
         resolved = file_path.resolve()
         if resolved in processed_files:
             continue
@@ -672,7 +666,7 @@ def process_year_folder(
     return frames
 
 
-def build_reserved_dataframe(
+def build_manage_fba_dataframe(
     client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     years: Optional[Sequence[str]] = None,
@@ -707,7 +701,7 @@ def build_reserved_dataframe(
     processed_files: Set[Path] = set()
     stats = LoadStats()
 
-    print("\n>>> STEP: load raw reserved files")
+    print("\n>>> STEP: load raw manage FBA files")
     for geo_code, inventory_root in resolve_geo_targets(cfg, geos):
         stats.geographies.add(geo_code)
         print(f"  geo root [{geo_code}]: {inventory_root}")
@@ -731,10 +725,10 @@ def build_reserved_dataframe(
         pd.concat(all_frames, ignore_index=True, sort=False) if all_frames else pd.DataFrame()
     )
     master_df = new_df
-    run_log = ReportRunLog(cfg.client_code, "reserved")
+    run_log = ReportRunLog(cfg.client_code, "manage_fba")
     try:
         summary = stats.print_summary(
-            title=f"{cfg.client_code} Reserved Inventory Load Summary"
+            title=f"{cfg.client_code} Manage FBA Inventory Load Summary"
         )
         run_log.append(summary)
 
@@ -748,8 +742,8 @@ def build_reserved_dataframe(
                 run_log.append(line)
 
         if apply_transform and not new_df.empty:
-            print("\n>>> STEP: transform (coalesce + SKU clean + pivot)")
-            new_df = transform_reserved(new_df, cfg=cfg)
+            print("\n>>> STEP: transform (filters + SKU clean + pivot)")
+            new_df = transform_manage_fba(new_df, cfg=cfg)
             print(f"Transformed new slice shape: {new_df.shape}")
 
         if merge_existing:
@@ -770,7 +764,7 @@ def build_reserved_dataframe(
             check_final_dataframe_new_skus(
                 master_df,
                 client=cfg.client_code,
-                label="reserved",
+                label="manage_fba",
                 run_log=run_log,
             )
 
@@ -789,7 +783,7 @@ def build_reserved_dataframe(
 # =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Client-wise reserved inventory combiner")
+    parser = argparse.ArgumentParser(description="Client-wise manage FBA inventory combiner")
     parser.add_argument("--client", default=CLIENT, choices=sorted(CLIENT_CONFIGS.keys()))
     parser.add_argument("--geos", default=None, help="Comma-separated geo codes")
     parser.add_argument("--years", default=None, help="Comma-separated years")
@@ -805,7 +799,7 @@ def main(argv: Optional[Sequence[str]] = None) -> Tuple[pd.DataFrame, List[dict]
     years = [y.strip() for y in args.years.split(",")] if args.years else None
     months = [m.strip() for m in args.months.split(",")] if args.months else None
 
-    master_df, failed_files, _stats = build_reserved_dataframe(
+    master_df, failed_files, _stats = build_manage_fba_dataframe(
         client=args.client,
         geos=geos,
         years=years,
@@ -843,5 +837,5 @@ def run(
 
 
 if __name__ == "__main__":
-    master_reserved_df, failed_files = main()
-    print_script_completed("reserved_report")
+    master_inventory_df, failed_files = main()
+    print_script_completed("manage_fba_report")

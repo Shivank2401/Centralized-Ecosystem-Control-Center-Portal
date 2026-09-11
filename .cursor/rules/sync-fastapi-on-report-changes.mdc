@@ -1,0 +1,49 @@
+---
+description: Keep FastAPI + portal registry in sync when reports/YAML change
+alwaysApply: true
+---
+# Sync FastAPI / portal when reports or report YAML change
+
+Whenever you **create or update** a report script, rename a `report_script/` package, or edit report-related YAML (`report.yaml`, `client.yaml`, `geography.yaml`, `.env.example`), also update the **FastAPI / portal integration surface** in the same change set.
+
+## Checklist (do what applies)
+
+1. **`config_manager/report.yaml`**
+   - `report_stages` entry (label, order, clients, enabled)
+   - `reports` entry (`module`, `stage`, `clients`, `output_subdir`, `menu_order`, `enabled`)
+
+2. **`pipeline_engine/registry.py`**
+   - `STAGE_PATHS[stage_key] = "report_script/<package>"` for every new/renamed stage package
+   - `STAGE_ALIASES` if stage labels/legacy names changed
+   - Geo codes: prefer `geography.yaml` (API uses `all_geo_codes()`); keep `GEO_OPTIONS` ordered for CLI menus
+
+3. **`backend/services/environment_service.py`**
+   - Add any new `.env` path keys the report needs to `_OPTIONAL_KEYS` (so Configuration → Environment shows status)
+
+4. **`config_manager/paths.py` + `.env.example`**
+   - Helpers for new env vars; document keys in `.env.example`
+
+5. **COGS / geography**
+   - Report COGS must resolve via `config_manager.cogs_local` + `geography.yaml` (`cogs_channel` / `cogs_channels`)
+   - Do not point report ETL at `ESH_COGS_PATH` / `KNC_COGS_PATH` Excel
+   - If a geo has multiple platforms (e.g. KNC UK amazon + shopify), set `cogs_channels` and force the report channel
+
+6. **Frontend stage aliases** (only if stage string aliases changed)
+   - `frontend/src/components/config/reports/utils.ts` — keep in sync with `STAGE_ALIASES`
+
+7. **Docs**
+   - `config_manager/project_structure.md`
+   - `brain/` note for the report / stage
+
+## Verify (quick)
+
+```python
+from backend.services.config_service import ConfigService
+from pipeline_engine.discovery import ReportDiscovery
+cs = ConfigService()
+assert any(s["key"] == "<stage>" for s in cs.list_stages())
+assert any(r["code"] == "<report>" for r in cs.list_reports(enabled_only=False))
+assert ReportDiscovery().module_file_path("report_script.<pkg>.<module>")
+```
+
+Do **not** hardcode report lists inside FastAPI routers — they must read YAML via `ConfigRegistry` / `ReportDiscovery`. Only update the registry maps, env catalog, and aliases above.

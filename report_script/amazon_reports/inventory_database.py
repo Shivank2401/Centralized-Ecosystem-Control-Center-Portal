@@ -119,7 +119,10 @@ class InventoryDbConfig:
 
 
 def _client_geos(client: str) -> List[str]:
-    return [str(g).upper() for g in load_geographies(client)]
+    # Amazon inventory DB only — exclude shopify-only geos (e.g. KNC IE)
+    return layouts.geos_with_channel(client, "amazon") or [
+        str(g).upper() for g in load_geographies(client)
+    ]
 
 
 def _overrides_for(client_code: str) -> ClientInventoryOverrides:

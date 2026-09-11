@@ -30,10 +30,18 @@ class EnableBody(BaseModel):
 
 class GeographyBody(BaseModel):
     country_code: Optional[str] = None
-    cogs_sheet_name: str
     country_currency: str
-    orders_sales_channel: str = ""
     enabled: bool = True
+    default_channel: Optional[str] = "amazon"
+    channels: Optional[Dict[str, Any]] = None
+    # Legacy flat fields (still accepted; converted to channels on save)
+    cogs_sheet_name: Optional[str] = None
+    cogs_channel: Optional[str] = "amazon"
+    cogs_channels: Optional[Dict[str, str]] = None
+    orders_sales_channel: str = ""
+    markets: Optional[List[str]] = None
+    vendors: Optional[List[str]] = None
+    excel_sheet: Optional[str] = None
 
 
 class ReportBody(BaseModel):

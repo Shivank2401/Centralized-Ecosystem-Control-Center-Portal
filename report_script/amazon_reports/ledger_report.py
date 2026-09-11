@@ -1,12 +1,11 @@
 """
-Client-aware Amazon FBA Inventory Ageing combiner.
+Client-aware Amazon Inventory Ledger combiner.
 
 Covers:
   - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
-  - Source: amazon fba_inventory / KNC fba Inventory year-month folders
-  - SKU clean via esh_sku_cleaning / knc_sku_cleaning + COGS sheets
-  - Outputs: sanity_data/{CLIENT}/ageing/{GEO}_ageing_inventory.parquet
-  - Run log + new-SKU vs COGS under sanity_data/{CLIENT}/logs/
+  - Source: ledger_report year folders; KNC AE adds Title "Kinetica" + amazon_ae SKU clean
+  - Date cleaning matches ledger.ipynb (do not change)
+  - Outputs: sanity_data/{CLIENT}/ledger/{GEO}_ledger_inventory.parquet|.csv
 
 Adding a NEW client (no ETL changes needed):
   1. Add client + geos in client.yaml / geography.yaml / layouts.py
@@ -16,9 +15,8 @@ Adding a NEW client (no ETL changes needed):
 Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
 
 Run:
-    python report_script/amazon_reports/ageing_report.py
-    python report_script/amazon_reports/ageing_report.py --client ESH
-    python report_script/amazon_reports/ageing_report.py --client KNC --geos UK,DE,AE
+    python report_script/amazon_reports/ledger_report.py --client ESH
+    python report_script/amazon_reports/ledger_report.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -42,7 +40,6 @@ from config_manager.report_helpers import (
     IGNORE_FILE_NAMES,
     IGNORE_FILE_PREFIXES,
     LoadStats,
-    coalesce_snake_columns,
     load_existing_parquet_outputs,
     merge_append_dedupe,
 )
@@ -70,119 +67,55 @@ SAVE_OUTPUT = True
 APPLY_TRANSFORM = True
 MERGE_WITH_EXISTING = True
 
-PARQUET_NAME_SUFFIX = "ageing_inventory"
-MAX_DOS_CAP = 365
+PARQUET_NAME_SUFFIX = "ledger_inventory"
 DEDUPE_SUBSET = ["client", "geography", "date", "sku"]
 
-
-# =============================================================================
-# Shared column sets (ESH notebook + KNC calculated cols)
-# =============================================================================
-
-FINAL_COLUMNS = [
-    "date",
-    "sku",
-    "sell_thru",
-    "dos",  # calculated (KNC: DOS_2)
-    "available",
-    "fc_transfer",
-    "days_of_supply",  # Amazon native
-    "velocity_trend",
-    "velocity_trend_status",
-    "daily_velocity_t30",
-    "daily_velocity_t60",
-    "daily_velocity_t90",
-    "inv_age_0_to_30_days",
-    "inv_age_31_to_60_days",
-    "inv_age_61_to_90_days",
-    "inv_age_91_to_180_days",
-    "inv_age_181_to_270_days",
-    "inv_age_271_to_365_days",
-    "inv_age_365_plus_days",
-    "units_shipped_t7",
-    "units_shipped_t30",
-    "units_shipped_t60",
-    "units_shipped_t90",
-    "recommended_action",
-    "estimated_cost_savings_of_recommended_actions",
-    "estimated_storage_cost_next_month",
-    "healthy_inventory_level",
-    "quantity_to_be_charged_ais_181_210_days",
-    "estimated_ais_181_210_days",
-    "quantity_to_be_charged_ais_211_240_days",
-    "estimated_ais_211_240_days",
-    "quantity_to_be_charged_ais_241_270_days",
-    "estimated_ais_241_270_days",
-    "quantity_to_be_charged_ais_271_300_days",
-    "estimated_ais_271_300_days",
-    "quantity_to_be_charged_ais_301_330_days",
-    "estimated_ais_301_330_days",
-    "quantity_to_be_charged_ais_331_365_days",
-    "estimated_ais_331_365_days",
-    "estimated_ais_365_plus_days",
-    "quantity_to_be_charged_ais_366_455_days",
-    "estimated_ais_366_455_days",
-    "quantity_to_be_charged_ais_456_plus_days",
-    "estimated_ais_456_plus_days",
-]
-
-PIVOT_VALUES = [
-    "healthy_inventory_level",
-    "days_of_supply",
-    "available",
-    "fc_transfer",
-    "inv_age_0_to_30_days",
-    "inv_age_31_to_60_days",
-    "inv_age_61_to_90_days",
-    "inv_age_91_to_180_days",
-    "inv_age_181_to_270_days",
-    "inv_age_271_to_365_days",
-    "inv_age_365_plus_days",
-    "units_shipped_t7",
-    "units_shipped_t30",
-    "units_shipped_t60",
-    "units_shipped_t90",
-    "recommended_action",
-    "estimated_cost_savings_of_recommended_actions",
-    "estimated_storage_cost_next_month",
-    "estimated_ais_365_plus_days",
-    "quantity_to_be_charged_ais_181_210_days",
-    "estimated_ais_181_210_days",
-    "quantity_to_be_charged_ais_211_240_days",
-    "estimated_ais_211_240_days",
-    "quantity_to_be_charged_ais_241_270_days",
-    "estimated_ais_241_270_days",
-    "quantity_to_be_charged_ais_271_300_days",
-    "estimated_ais_271_300_days",
-    "quantity_to_be_charged_ais_301_330_days",
-    "estimated_ais_301_330_days",
-    "quantity_to_be_charged_ais_331_365_days",
-    "estimated_ais_331_365_days",
-    "quantity_to_be_charged_ais_366_455_days",
-    "estimated_ais_366_455_days",
-    "quantity_to_be_charged_ais_456_plus_days",
-    "estimated_ais_456_plus_days",
-]
-
-# Short DE exports (2024/2025) use a reduced Amazon column set
-AGEING_COLUMN_ALIASES: Dict[str, str] = {
-    "reserved_fc_transfer": "fc_transfer",
-    "afn_fc_transfer_quantity": "fc_transfer",
-    "inventory_age_snapshot_date": "snapshot_date",
-    "inv_age_181_to_330_days": "inv_age_181_to_270_days",
-    "inv_age_331_to_365_days": "inv_age_271_to_365_days",
-    "quantity_to_be_charged_ais_365_plus_days": "quantity_to_be_charged_ais_456_plus_days",
+# Exact month_map from ledger.ipynb / ledger_database.py
+MONTH_MAP = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
 }
+
+CHECKLIST_ALIAS_COLUMNS = [
+    "MSKU",
+    "SKU",
+    "Disposition",
+    "Condition_Type",
+    "Ending Warehouse Balance",
+    "Ending_Inventory",
+]
 
 
 # =============================================================================
 # Client configuration
 #   New client = copy a builder + register in CLIENT_CONFIGS.
-#   Fill geo_roots OR geo_folders + relative_ageing_path.
+#   Fill geo_roots OR geo_folders + relative_ledger_path.
 # =============================================================================
 
 @dataclass
-class ClientAgeingConfig:
+class ClientLedgerConfig:
     client_code: str
     client_id: str
     client_name: str
@@ -193,16 +126,16 @@ class ClientAgeingConfig:
     cogs_path: Path = field(default_factory=Path)
     cogs_sheets: Dict[str, str] = field(default_factory=dict)
     sku_backend: str = "esh"
-    product_name_contains: Dict[str, str] = field(default_factory=dict)
+    title_contains: Dict[str, str] = field(default_factory=dict)
     sku_source_by_geo: Dict[str, str] = field(default_factory=dict)
-    relative_ageing_path: Path = field(
-        default_factory=lambda: Path("input") / "amazon" / "fba_inventory"
+    relative_ledger_path: Path = field(
+        default_factory=lambda: Path("input") / "amazon" / "inventory_ledger"
     )
 
 
-def _esh_config() -> ClientAgeingConfig:
+def _esh_config() -> ClientLedgerConfig:
     ident = layouts.client_identity("ESH")
-    return ClientAgeingConfig(
+    return ClientLedgerConfig(
         client_code=ident["client_code"],
         client_id=ident["client_id"],
         client_name=ident["client_name"],
@@ -210,36 +143,36 @@ def _esh_config() -> ClientAgeingConfig:
         layout=ident["layout"],
         geo_folders=dict(layouts.ESH_GEO_FOLDERS),
         cogs_path=layouts.cogs_path("ESH"),
-        cogs_sheets=layouts.cogs_sheets_for("ESH"),
+        cogs_sheets=layouts.cogs_sheets_for("ESH", channel="amazon"),
         sku_backend="esh",
     )
 
 
-def _knc_config() -> ClientAgeingConfig:
+def _knc_config() -> ClientLedgerConfig:
     ident = layouts.client_identity("KNC")
     base = layouts.data_root("KNC")
-    return ClientAgeingConfig(
+    return ClientLedgerConfig(
         client_code=ident["client_code"],
         client_id=ident["client_id"],
         client_name=ident["client_name"],
         base_path=base,
         layout=ident["layout"],
-        geo_roots=layouts.knc_geo_roots("ageing", base),
+        geo_roots=layouts.knc_geo_roots("ledger", base),
         cogs_path=layouts.cogs_path("KNC"),
-        cogs_sheets=layouts.cogs_sheets_for("KNC"),
+        cogs_sheets=layouts.cogs_sheets_for("KNC", channel="amazon"),
         sku_backend="knc",
-        product_name_contains={"AE": "Kinetica"},
+        title_contains={"AE": "Kinetica"},
         sku_source_by_geo={"AE": "amazon_ae"},
     )
 
 
-CLIENT_CONFIGS: Dict[str, Callable[[], ClientAgeingConfig]] = {
+CLIENT_CONFIGS: Dict[str, Callable[[], ClientLedgerConfig]] = {
     "ESH": _esh_config,
     "KNC": _knc_config,
 }
 
 
-def get_client_config(client: str) -> ClientAgeingConfig:
+def get_client_config(client: str) -> ClientLedgerConfig:
     key = str(client).strip().upper()
     if key not in CLIENT_CONFIGS:
         known = ", ".join(sorted(CLIENT_CONFIGS))
@@ -248,20 +181,20 @@ def get_client_config(client: str) -> ClientAgeingConfig:
 
 
 def output_dir_for(client_code: str) -> Path:
-    return paths.sanity_data_root() / client_code.upper() / "ageing"
+    return paths.sanity_data_root() / client_code.upper() / "ledger"
 
 
-def geo_code_label(geography: str, cfg: ClientAgeingConfig) -> str:
+def geo_code_label(geography: str, cfg: ClientLedgerConfig) -> str:
     g = str(geography).strip()
-    if g.upper() in {c.upper() for c in cfg.cogs_sheets}:
-        for code in cfg.cogs_sheets:
-            if code.upper() == g.upper():
-                return code
+    upper = g.upper()
+    for code in cfg.cogs_sheets:
+        if code.upper() == upper:
+            return code
     if cfg.layout == "esh":
         mapped = cfg.geo_folders.get(g.lower())
         if mapped:
             return mapped
-    return g.upper()
+    return upper
 
 
 # =============================================================================
@@ -269,7 +202,7 @@ def geo_code_label(geography: str, cfg: ClientAgeingConfig) -> str:
 # =============================================================================
 
 def load_client_sku_mapping(
-    cfg: ClientAgeingConfig,
+    cfg: ClientLedgerConfig,
     geography_code: Optional[str] = None,
 ) -> dict:
     geos = [geography_code] if geography_code else list(cfg.cogs_sheets.keys())
@@ -280,7 +213,7 @@ def load_client_sku_mapping(
 
 def clean_client_skus(
     df: pd.DataFrame,
-    cfg: ClientAgeingConfig,
+    cfg: ClientLedgerConfig,
     geography_code: str,
     sku_mapping: Optional[dict] = None,
 ) -> pd.DataFrame:
@@ -299,10 +232,10 @@ def clean_client_skus(
 # =============================================================================
 
 def resolve_geo_targets(
-    cfg: ClientAgeingConfig,
+    cfg: ClientLedgerConfig,
     geos: Optional[Sequence[str]] = None,
 ) -> List[Tuple[str, Path]]:
-    """Prefer geo_roots when set; else geo_folders + relative_ageing_path."""
+    """Prefer geo_roots when set; else geo_folders + relative_ledger_path."""
     wanted: Optional[Set[str]] = None
     if geos is not None:
         wanted = {str(g).strip().upper() for g in geos}
@@ -314,16 +247,16 @@ def resolve_geo_targets(
             if wanted is not None and code.upper() not in wanted:
                 continue
             if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Ageing path missing: {root}")
+                print(f"[WARN] [{cfg.client_code}] Ledger path missing: {root}")
                 continue
             targets.append((code, root))
     else:
         for folder, code in cfg.geo_folders.items():
             if wanted is not None and code.upper() not in wanted:
                 continue
-            root = cfg.base_path / folder / cfg.relative_ageing_path
+            root = cfg.base_path / folder / cfg.relative_ledger_path
             if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Ageing path missing: {root}")
+                print(f"[WARN] [{cfg.client_code}] Ledger path missing: {root}")
                 continue
             targets.append((code, root))
 
@@ -331,14 +264,14 @@ def resolve_geo_targets(
 
 
 def discover_year_folders(
-    ageing_root: Path,
+    ledger_root: Path,
     years: Optional[Sequence[str]] = None,
 ) -> List[Path]:
     allowed = set(VALID_YEARS)
     if years is not None:
         allowed &= {str(y) for y in years}
     found: List[Path] = []
-    for path in ageing_root.iterdir():
+    for path in ledger_root.iterdir():
         if path.is_dir() and path.name in allowed:
             found.append(path)
     return sorted(found, key=lambda p: p.name)
@@ -350,8 +283,6 @@ def is_ignored_file(file_path: Path) -> bool:
     if lower in IGNORE_FILE_NAMES:
         return True
     if any(name.startswith(prefix) for prefix in IGNORE_FILE_PREFIXES):
-        return True
-    if lower in {"fba_inventory.csv", "fba_inventory_aging.csv"}:
         return True
     return False
 
@@ -376,12 +307,13 @@ def _month_filter_tokens(months: Optional[Sequence[str]]) -> Optional[Set[str]]:
     return tokens
 
 
-def discover_ageing_files(
+def discover_ledger_files(
     year_path: Path,
     months: Optional[Sequence[str]] = None,
 ) -> List[Path]:
     if not year_path.is_dir():
         return []
+
     wanted = _month_filter_tokens(months)
     files: List[Path] = []
     for path in year_path.rglob("*"):
@@ -404,17 +336,15 @@ def _hydrate_onedrive_file(file_path: Path) -> None:
         handle.read(1)
 
 
-def read_ageing_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
+def read_ledger_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
     last_error: Optional[Exception] = None
     for attempt in range(1, retries + 1):
         try:
             _hydrate_onedrive_file(file_path)
-            for encoding in ("utf-8-sig", "utf-8", "latin1"):
-                try:
-                    return pd.read_csv(file_path, encoding=encoding)
-                except UnicodeDecodeError:
-                    continue
-            return pd.read_csv(file_path, encoding="latin1")
+            try:
+                return pd.read_csv(file_path, encoding="utf-8")
+            except UnicodeDecodeError:
+                return pd.read_csv(file_path, encoding="latin1")
         except OSError as exc:
             last_error = exc
             if getattr(exc, "errno", None) != 22 and getattr(exc, "winerror", None) != 22:
@@ -434,182 +364,176 @@ def read_ageing_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
 
 
 # =============================================================================
-# Transform (ETL — do not change formulas when cleaning style)
+# Checklist aliases + date cleaning (exact ledger_database / notebook logic)
 # =============================================================================
 
-def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
-    """Unify Amazon ageing headers across full vs short (DE 2024/2025) exports."""
-    out = coalesce_snake_columns(df)
+def _resolve_alias_column(df: pd.DataFrame, canonical: str) -> Optional[str]:
+    if canonical in df.columns:
+        return canonical
+    lowered = {str(c).strip().lower().replace(" ", "_"): c for c in df.columns}
+    key = canonical.strip().lower().replace(" ", "_")
+    return lowered.get(key)
 
-    rename_map: Dict[str, str] = {}
-    for src, dest in AGEING_COLUMN_ALIASES.items():
-        if src in out.columns and dest not in out.columns:
-            rename_map[src] = dest
-        elif src in out.columns and dest in out.columns and src != dest:
-            out[dest] = out[dest].combine_first(out[src])
-            out = out.drop(columns=[src])
-    if rename_map:
-        out = out.rename(columns=rename_map)
 
-    if "fc_transfer" not in out.columns and "afn_fc_transfer_quantity" in out.columns:
-        out = out.rename(columns={"afn_fc_transfer_quantity": "fc_transfer"})
+def ensure_checklist_alias_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out.columns = [
+        str(c).replace("\ufeff", "").strip().strip('"').strip("'") for c in out.columns
+    ]
+
+    for canonical in CHECKLIST_ALIAS_COLUMNS:
+        found = _resolve_alias_column(out, canonical)
+        if found is None:
+            out[canonical] = np.nan
+        elif found != canonical:
+            out[canonical] = out[found]
+
+    date_col = _resolve_alias_column(out, "Date")
+    if date_col is None:
+        raise KeyError("Expected Date column in ledger file")
+    if date_col != "Date":
+        out["Date"] = out[date_col]
     return out
 
 
-def ensure_snapshot_date(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    if "snapshot_date" not in out.columns:
-        for alt in ("inventory_age_snapshot_date", "snapshotdate"):
-            if alt in out.columns:
-                out["snapshot_date"] = out[alt]
+def apply_checklist_aliases(df: pd.DataFrame) -> pd.DataFrame:
+    ledger_df = ensure_checklist_alias_columns(df)
+
+    ledger_df["sku"] = np.where(
+        ledger_df["MSKU"].isnull(), ledger_df["SKU"], ledger_df["MSKU"]
+    )
+    ledger_df["disposition"] = np.where(
+        ledger_df["Disposition"].isnull(),
+        ledger_df["Condition_Type"],
+        ledger_df["Disposition"],
+    )
+    ledger_df["ending_balance"] = np.where(
+        ledger_df["Ending Warehouse Balance"].isnull(),
+        ledger_df["Ending_Inventory"],
+        ledger_df["Ending Warehouse Balance"],
+    )
+
+    ledger_df = ledger_df.loc[:, ["Date", "sku", "disposition", "ending_balance"]]
+    ledger_df = ledger_df.loc[:, ~ledger_df.columns.duplicated()].copy()
+    return ledger_df
+
+
+def apply_ledger_date_cleaning(ledger_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    DATE CLEANING from ledger.ipynb — keep unchanged.
+    Includes intentional: month = day, day = month in to_datetime.
+    """
+    ledger_df = ledger_df.copy()
+    month_map = MONTH_MAP
+
+    date_parts = ledger_df["Date"].astype(str).str.split(r"[/-]", expand=True)
+    ledger_df["day"] = date_parts[0]
+    ledger_df["month"] = date_parts[1]
+    ledger_df["year"] = date_parts[2]
+
+    ledger_df["month"] = (
+        ledger_df["month"].astype(str).str.strip().str.lower().replace(month_map)
+    )
+
+    ledger_df["day"] = pd.to_numeric(ledger_df["day"], errors="coerce")
+    ledger_df["month"] = pd.to_numeric(ledger_df["month"], errors="coerce")
+    ledger_df["year"] = pd.to_numeric(ledger_df["year"], errors="coerce")
+    ledger_df["year"] = np.where(
+        ledger_df["year"] < 100,
+        ledger_df["year"] + 2000,
+        ledger_df["year"],
+    )
+
+    swap_mask = ledger_df["day"] > 12
+    ledger_df.loc[swap_mask, ["month", "day"]] = ledger_df.loc[
+        swap_mask, ["day", "month"]
+    ].values
+
+    ledger_df["date"] = pd.to_datetime(
+        {
+            "year": ledger_df["year"],
+            "month": ledger_df["day"],
+            "day": ledger_df["month"],
+        },
+        errors="coerce",
+    )
+    return ledger_df
+
+
+def _filter_title_if_needed(
+    df: pd.DataFrame,
+    cfg: ClientLedgerConfig,
+    geography_code: str,
+) -> pd.DataFrame:
+    needle = cfg.title_contains.get(geography_code)
+    if not needle:
+        return df
+
+    title_col = _resolve_alias_column(df, "Title")
+    if title_col is None:
+        for c in df.columns:
+            if str(c).strip().lower() == "title":
+                title_col = c
                 break
-    if "snapshot_date" not in out.columns:
-        raise KeyError("Expected snapshot_date column in ageing file")
-    out["date"] = (
-        pd.to_datetime(out["snapshot_date"], errors="coerce", format="mixed")
-        .dt.strftime("%Y-%m-%d")
-        .where(lambda s: s.notna(), None)
-    )
-    return out
+    if title_col is None:
+        print(f"  [{geography_code}] WARN: Title filter requested but Title column missing")
+        return df
 
-
-def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calculated columns from knc_ageing.py / ESH ageing notebook:
-      sell_thru, dos (DOS_2), daily_velocity_*, velocity_trend(_status)
-    """
-    out = df.copy()
-    for col in ("units_shipped_t30", "units_shipped_t60", "units_shipped_t90", "available"):
-        if col not in out.columns:
-            out[col] = 0
-        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
-
-    out["sell_thru"] = np.where(
-        out["units_shipped_t90"] == 0,
-        (out["units_shipped_t30"] / 30 + out["units_shipped_t60"] / 60) / 2,
-        (
-            out["units_shipped_t30"] / 30
-            + out["units_shipped_t60"] / 60
-            + out["units_shipped_t90"] / 90
-        )
-        / 3,
-    )
-
-    out["dos"] = np.where(
-        out["sell_thru"] > 0,
-        np.minimum(out["available"] / out["sell_thru"], MAX_DOS_CAP),
-        np.where(out["available"] > 0, MAX_DOS_CAP, 0),
-    )
-
-    out["daily_velocity_t30"] = out["units_shipped_t30"] / 30
-    out["daily_velocity_t60"] = out["units_shipped_t60"] / 60
-    out["daily_velocity_t90"] = np.where(
-        out["units_shipped_t90"] == 0,
-        out["daily_velocity_t60"],
-        out["units_shipped_t90"] / 90,
-    )
-    out["velocity_trend"] = np.where(
-        out["daily_velocity_t90"] != 0,
-        out["daily_velocity_t30"] / out["daily_velocity_t90"],
-        0,
-    )
-    out["velocity_trend_status"] = np.where(
-        out["velocity_trend"] > 1.2,
-        "Accelerating demand (risk of stockout)",
-        np.where(
-            (out["velocity_trend"] > 0.8) & (out["velocity_trend"] < 1.2),
-            "Stable demand",
-            "Declining demand (lower restock priority)",
-        ),
-    )
+    before = len(df)
+    out = df[
+        df[title_col].astype(str).str.contains(needle, case=False, na=False)
+    ].copy()
+    print(f"  [{geography_code}] Title filter '{needle}': {before:,} -> {len(out):,}")
     return out
 
 
 def transform_geography_frame(
     geo_df: pd.DataFrame,
-    cfg: ClientAgeingConfig,
+    cfg: ClientLedgerConfig,
     geography_code: str,
     sku_mapping: Optional[dict] = None,
 ) -> pd.DataFrame:
     if geo_df.empty:
         return pd.DataFrame()
 
-    ageing = normalize_headers(geo_df)
-    ageing = ensure_snapshot_date(ageing)
+    work = _filter_title_if_needed(geo_df, cfg, geography_code)
+    ledger_df = apply_checklist_aliases(work)
 
-    needle = cfg.product_name_contains.get(geography_code)
-    if needle:
-        name_col = None
-        for cand in ("product_name", "productname", "title"):
-            if cand in ageing.columns:
-                name_col = cand
-                break
-        if name_col:
-            before = len(ageing)
-            ageing = ageing[
-                ageing[name_col].astype(str).str.contains(needle, case=False, na=False)
-            ].copy()
-            print(
-                f"  [{geography_code}] product_name filter '{needle}': "
-                f"{before:,} -> {len(ageing):,}"
-            )
-
-    if "sku" not in ageing.columns:
-        raise KeyError(f"[{geography_code}] Expected sku column after header normalize")
+    # Keep SELLABLE only
+    ledger_df = ledger_df.drop(ledger_df[ledger_df["disposition"] != "SELLABLE"].index)
 
     if sku_mapping is None:
         sku_mapping = load_client_sku_mapping(cfg, geography_code)
 
-    ageing = clean_client_skus(ageing, cfg, geography_code, sku_mapping=sku_mapping)
-    ageing = ageing.dropna(subset=["sku", "date"])
-
-    for col in ["units_shipped_t30", "units_shipped_t60", "units_shipped_t90"]:
-        if col not in ageing.columns:
-            ageing[col] = 0
-        ageing[col] = pd.to_numeric(ageing[col], errors="coerce").fillna(0)
-
-    pivot_cols = list(dict.fromkeys(PIVOT_VALUES))
-    for col in pivot_cols:
-        if col not in ageing.columns:
-            ageing[col] = 0
-
-    agg: Dict[str, str] = {}
-    for col in pivot_cols:
-        if col == "recommended_action":
-            agg[col] = "first"
-        else:
-            ageing[col] = pd.to_numeric(ageing[col], errors="coerce").fillna(0)
-            agg[col] = "sum"
-
-    ageing = (
-        pd.pivot_table(
-            ageing,
-            index=["date", "sku"],
-            values=list(agg.keys()),
-            aggfunc=agg,
-        )
-        .reset_index()
+    ledger_df = clean_client_skus(
+        ledger_df, cfg, geography_code, sku_mapping=sku_mapping
     )
 
-    ageing = add_metrics(ageing)
-    ageing["geography"] = geography_code
-    ageing["client"] = cfg.client_code
-    ageing["client_id"] = cfg.client_id
-    ageing["platform"] = "amazon"
+    # Exact notebook date logic
+    ledger_df = apply_ledger_date_cleaning(ledger_df)
 
-    for col in FINAL_COLUMNS:
-        if col not in ageing.columns:
-            ageing[col] = 0
+    ledger_df["ending_balance"] = pd.to_numeric(
+        ledger_df["ending_balance"], errors="coerce"
+    ).fillna(0)
+    ledger_df = ledger_df.dropna(subset=["sku", "date"])
 
-    ordered = ["client", "client_id", "geography", "platform"] + [
-        c for c in FINAL_COLUMNS if c in ageing.columns
+    ledger_daily = (
+        ledger_df.groupby(["sku", "date"])["ending_balance"].sum().reset_index()
+    )
+    ledger_daily["geography"] = geography_code
+    ledger_daily["client"] = cfg.client_code
+    ledger_daily["client_id"] = cfg.client_id
+    ledger_daily["platform"] = "amazon"
+    ledger_daily = ledger_daily.loc[
+        :,
+        ["client", "client_id", "geography", "platform", "date", "sku", "ending_balance"],
     ]
-    return ageing.loc[:, ordered].drop_duplicates().reset_index(drop=True)
+    return ledger_daily.drop_duplicates().reset_index(drop=True)
 
 
-def transform_ageing(
+def transform_ledger(
     raw_df: pd.DataFrame,
-    cfg: ClientAgeingConfig,
+    cfg: ClientLedgerConfig,
 ) -> pd.DataFrame:
     if raw_df.empty:
         return pd.DataFrame()
@@ -623,7 +547,7 @@ def transform_ageing(
             cleaned = transform_geography_frame(
                 geo_df, cfg=cfg, geography_code=code, sku_mapping=sku_mapping
             )
-            print(f"  Result: {len(cleaned):,} pivoted rows")
+            print(f"  Result: {len(cleaned):,} daily rows")
             if not cleaned.empty:
                 frames.append(cleaned)
         except Exception as exc:  # noqa: BLE001
@@ -647,13 +571,15 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\n>>> STEP: save per-geography ageing → {output_dir}")
+    print(f"\n>>> STEP: save per-geography ledger → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
+        csv_path = output_dir / f"{geo_name}_{name_suffix}.csv"
         geo_df.to_parquet(parquet_path, index=False)
-        saved.append(parquet_path)
-        print(f"  [{geo_name}] {len(geo_df):,} rows -> {parquet_path.name}")
+        geo_df.to_csv(csv_path, index=False)
+        saved.extend([parquet_path, csv_path])
+        print(f"  [{geo_name}] {len(geo_df):,} rows -> {parquet_path.name}, {csv_path.name}")
     return saved
 
 
@@ -674,14 +600,14 @@ def process_year_folder(
 ) -> List[pd.DataFrame]:
     client = str(client_code).strip().upper() or "?"
     frames: List[pd.DataFrame] = []
-    for file_path in discover_ageing_files(year_path, months=months):
+    for file_path in discover_ledger_files(year_path, months=months):
         resolved = file_path.resolve()
         if resolved in processed_files:
             continue
+
         print(f"[{client}] [{geography_code}] [{year}] Reading {file_path.name}")
         try:
-            df = read_ageing_csv(file_path)
-            df = normalize_headers(df)
+            df = read_ledger_csv(file_path)
             df = df.copy()
             df["geography"] = geography_code
             df["year"] = int(year) if str(year).isdigit() else year
@@ -707,7 +633,7 @@ def process_year_folder(
     return frames
 
 
-def build_ageing_dataframe(
+def build_ledger_dataframe(
     client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     years: Optional[Sequence[str]] = None,
@@ -728,7 +654,6 @@ def build_ageing_dataframe(
 
     print("=" * 60)
     print(f"Client : {cfg.client_code} ({cfg.client_name})")
-    print(f"Script : {Path(__file__).resolve()}")
     print(f"ID     : {cfg.client_id}")
     print(f"Base   : {cfg.base_path}")
     print(f"Years  : {list(years)}")
@@ -743,11 +668,11 @@ def build_ageing_dataframe(
     processed_files: Set[Path] = set()
     stats = LoadStats()
 
-    print("\n>>> STEP: load raw ageing files")
-    for geo_code, ageing_root in resolve_geo_targets(cfg, geos):
+    print("\n>>> STEP: load raw ledger files")
+    for geo_code, ledger_root in resolve_geo_targets(cfg, geos):
         stats.geographies.add(geo_code)
-        print(f"  geo root [{geo_code}]: {ageing_root}")
-        for year_path in discover_year_folders(ageing_root, years=years):
+        print(f"  geo root [{geo_code}]: {ledger_root}")
+        for year_path in discover_year_folders(ledger_root, years=years):
             year = year_path.name
             stats.year_folders.add(f"{geo_code}/{year}")
             all_frames.extend(
@@ -767,10 +692,10 @@ def build_ageing_dataframe(
         pd.concat(all_frames, ignore_index=True, sort=False) if all_frames else pd.DataFrame()
     )
     master_df = new_df
-    run_log = ReportRunLog(cfg.client_code, "ageing")
+    run_log = ReportRunLog(cfg.client_code, "ledger")
     try:
         summary = stats.print_summary(
-            title=f"{cfg.client_code} Ageing Inventory Load Summary"
+            title=f"{cfg.client_code} Ledger Inventory Load Summary"
         )
         run_log.append(summary)
 
@@ -784,8 +709,8 @@ def build_ageing_dataframe(
                 run_log.append(line)
 
         if apply_transform and not new_df.empty:
-            print("\n>>> STEP: transform (SKU clean + pivot + calculated metrics)")
-            new_df = transform_ageing(new_df, cfg=cfg)
+            print("\n>>> STEP: transform (aliases + date clean + daily agg)")
+            new_df = transform_ledger(new_df, cfg=cfg)
             print(f"Transformed new slice shape: {new_df.shape}")
 
         if merge_existing:
@@ -806,7 +731,7 @@ def build_ageing_dataframe(
             check_final_dataframe_new_skus(
                 master_df,
                 client=cfg.client_code,
-                label="ageing",
+                label="ledger",
                 run_log=run_log,
             )
 
@@ -825,7 +750,7 @@ def build_ageing_dataframe(
 # =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Client-wise ageing inventory combiner")
+    parser = argparse.ArgumentParser(description="Client-wise ledger inventory combiner")
     parser.add_argument("--client", default=CLIENT, choices=sorted(CLIENT_CONFIGS.keys()))
     parser.add_argument("--geos", default=None, help="Comma-separated geo codes")
     parser.add_argument("--years", default=None, help="Comma-separated years")
@@ -841,7 +766,7 @@ def main(argv: Optional[Sequence[str]] = None) -> Tuple[pd.DataFrame, List[dict]
     years = [y.strip() for y in args.years.split(",")] if args.years else None
     months = [m.strip() for m in args.months.split(",")] if args.months else None
 
-    master_df, failed_files, _stats = build_ageing_dataframe(
+    master_df, failed_files, _stats = build_ledger_dataframe(
         client=args.client,
         geos=geos,
         years=years,
@@ -879,5 +804,5 @@ def run(
 
 
 if __name__ == "__main__":
-    master_ageing_df, failed_files = main()
-    print_script_completed("ageing_report")
+    master_ledger_df, failed_files = main()
+    print_script_completed("ledger_report")

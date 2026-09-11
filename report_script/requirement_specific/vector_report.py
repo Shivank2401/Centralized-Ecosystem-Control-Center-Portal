@@ -170,7 +170,10 @@ class VectorConfig:
 
 
 def _client_geos(client: str) -> List[str]:
-    return [str(g).upper() for g in load_geographies(client)]
+    # Vector Datahive is Amazon inventory — exclude shopify-only geos (e.g. KNC IE)
+    return layouts.geos_with_channel(client, "amazon") or [
+        str(g).upper() for g in load_geographies(client)
+    ]
 
 
 def get_vector_config(

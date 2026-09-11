@@ -103,13 +103,14 @@ def load_cogs_helper_frame(
     sheet_names: Optional[Sequence[str]] = None,
     *,
     geos: Optional[Sequence[str]] = None,
-    channel: str = "amazon",
+    channel: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Load KNC COGS from local project slices:
 
       cogs/knc/{geo}_{channel}_cogs.parquet|.csv
 
+    Channel defaults per geo from geography.yaml when ``channel`` is None.
     ``cogs_path`` is ignored (kept for call-site compatibility).
     """
     from config_manager import cogs_local
@@ -130,7 +131,7 @@ def load_sku_mapping(
     sheet_names: Optional[Sequence[str]] = None,
     *,
     geos: Optional[Sequence[str]] = None,
-    channel: str = "amazon",
+    channel: Optional[str] = None,
     force_reload: bool = False,
 ) -> Dict[str, str]:
     """Load Kinetica local COGS slices → alias → master SKU (cached)."""
@@ -140,9 +141,10 @@ def load_sku_mapping(
     resolved = tuple(
         cogs_local.resolve_geos("KNC", geos=geos, sheet_names=sheet_names)
     )
+    ch_key = channel if channel is not None else "per-geo"
     cache_key = (
         str(cogs_local.client_cogs_dir("KNC")),
-        channel,
+        ch_key,
         resolved,
     )
 
@@ -163,7 +165,7 @@ def load_sku_mapping(
     mapping = build_sku_mapping(convertor_helper)
     print(
         f"SKU mapping aliases loaded: {len(mapping):,} "
-        f"(from cogs/knc geos={list(resolved) or 'ALL'})"
+        f"(from cogs/knc geos={list(resolved) or 'ALL'} channel={ch_key})"
     )
     _SKU_MAPPING_CACHE[cache_key] = mapping
     return mapping
@@ -259,7 +261,8 @@ def clean_sku_series(
 
     series = series.str.replace(r"-{1,2}$", "", regex=True).str.strip()
 
-    # Shopify / AE amazon: digit extract + KCA- prefix (from knc_ageing.py)
+    # Shopify (KNC UK + IE) / AE amazon: digit extract + KCA- prefix.
+    # Also covers DEFAULT_SKU_NORMALIZATION ("200855" → "KCA-200855") applied above.
     if source in {"shopify", "amazon_ae"}:
         digits = series.str.extract(r"(\d+)", expand=False)
         series = np.where(

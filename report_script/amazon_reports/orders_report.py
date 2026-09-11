@@ -171,8 +171,15 @@ class ClientOrdersConfig:
 
 def _geo_meta(client: str) -> Tuple[Dict[str, str], Dict[str, str]]:
     geos = load_geographies(client)
-    channels = {code: g.orders_sales_channel for code, g in geos.items()}
-    currencies = {code: g.country_currency for code, g in geos.items()}
+    channels: Dict[str, str] = {}
+    currencies: Dict[str, str] = {}
+    for code, g in geos.items():
+        currencies[code] = g.country_currency
+        # Amazon orders only use geos that define channels.amazon
+        if g.has_channel("amazon"):
+            sales = g.channel("amazon").orders_sales_channel
+            if sales:
+                channels[code] = sales
     return channels, currencies
 
 
@@ -188,7 +195,7 @@ def _esh_config() -> ClientOrdersConfig:
         base_path=revenue_root,
         geo_roots=layouts.esh_orders_geo_roots(revenue_root),
         cogs_path=layouts.cogs_path("ESH"),
-        cogs_sheets=layouts.cogs_sheets_for("ESH"),
+        cogs_sheets=layouts.cogs_sheets_for("ESH", channel="amazon"),
         sales_channels=channels,
         currencies=currencies,
         sku_backend="esh",
@@ -207,7 +214,7 @@ def _knc_config() -> ClientOrdersConfig:
         base_path=base,
         geo_roots=layouts.knc_geo_roots("orders", base),
         cogs_path=layouts.cogs_path("KNC"),
-        cogs_sheets=layouts.cogs_sheets_for("KNC"),
+        cogs_sheets=layouts.cogs_sheets_for("KNC", channel="amazon"),
         sales_channels=channels,
         currencies=currencies,
         sku_backend="knc",

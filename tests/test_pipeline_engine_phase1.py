@@ -31,8 +31,11 @@ def test_resolve_report_code_case_insensitive():
 
 def test_normalize_stage_key():
     assert normalize_stage_key("common") == "common"
-    assert normalize_stage_key("Common Sanity Reports") == "common"
-    assert normalize_stage_key("amazon_reportss") == "common"
+    assert normalize_stage_key("Amazon Reports") == "common"
+    assert normalize_stage_key("amazon_reports") == "common"
+    assert normalize_stage_key("Common Sanity Reports") == "common"  # legacy
+    assert normalize_stage_key("amazon_reportss") == "common"  # legacy typo
+    assert normalize_stage_key("common_sanity_report") == "common"  # legacy folder
     assert normalize_stage_key("Supply Chain") == "helper_files_nd_saving"
     assert normalize_stage_key("helper_files_nd_saving") == "helper_files_nd_saving"
     assert normalize_stage_key("Retail") == "retail"

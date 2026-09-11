@@ -1,5 +1,5 @@
 """
-Shared helpers for common sanity reports (formerly ecosoul.manage_fba_database).
+Shared helpers for Amazon reports (`report_script/amazon_reports`, stage key `common`).
 
 Used by manage_fba / reserved / ageing / ledger scripts — no client-specific paths.
 """

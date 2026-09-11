@@ -1,11 +1,10 @@
 """
-Client-aware Amazon Inventory Ledger combiner.
+Client-aware Amazon Reserved Inventory combiner.
 
 Covers:
   - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
-  - Source: ledger_report year folders; KNC AE adds Title "Kinetica" + amazon_ae SKU clean
-  - Date cleaning matches ledger.ipynb (do not change)
-  - Outputs: sanity_data/{CLIENT}/ledger/{GEO}_ledger_inventory.parquet|.csv
+  - Source: reserved_inventory folders; coalesce header aliases; pivot reserved qty/FC cols
+  - Outputs: sanity_data/{CLIENT}/reserved/{GEO}_reserved_inventory.parquet|.csv
 
 Adding a NEW client (no ETL changes needed):
   1. Add client + geos in client.yaml / geography.yaml / layouts.py
@@ -15,8 +14,9 @@ Adding a NEW client (no ETL changes needed):
 Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
 
 Run:
-    python report_script/amazon_reports/ledger_report.py --client ESH
-    python report_script/amazon_reports/ledger_report.py --client KNC --geos UK,DE,AE
+    python report_script/amazon_reports/reserved_report.py
+    python report_script/amazon_reports/reserved_report.py --client ESH
+    python report_script/amazon_reports/reserved_report.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -40,8 +40,11 @@ from config_manager.report_helpers import (
     IGNORE_FILE_NAMES,
     IGNORE_FILE_PREFIXES,
     LoadStats,
+    SUPPORTED_EXTENSIONS,
+    _clean_col,
     load_existing_parquet_outputs,
     merge_append_dedupe,
+    to_snake,
 )
 from config_manager import esh_sku_cleaning, knc_sku_cleaning, paths
 from config_manager import layouts
@@ -56,66 +59,50 @@ from report_script.amazon_reports.run_logs import ReportRunLog
 # Run knobs
 # =============================================================================
 
-CLIENT = "KNC"  # CLI default; pipeline passes client= via run()
+CLIENT = "ESH"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
 
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
-PROCESS_YEARS: Optional[List[str]] = [ "2026"]
+PROCESS_YEARS: Optional[List[str]] = ["2026"]
 PROCESS_MONTHS: Optional[List[str]] = None
 
 SAVE_OUTPUT = True
 APPLY_TRANSFORM = True
 MERGE_WITH_EXISTING = True
 
-PARQUET_NAME_SUFFIX = "ledger_inventory"
+PARQUET_NAME_SUFFIX = "reserved_inventory"
 DEDUPE_SUBSET = ["client", "geography", "date", "sku"]
 
-# Exact month_map from ledger.ipynb / ledger_database.py
-MONTH_MAP = {
-    "jan": 1,
-    "january": 1,
-    "feb": 2,
-    "february": 2,
-    "mar": 3,
-    "march": 3,
-    "apr": 4,
-    "april": 4,
-    "may": 5,
-    "jun": 6,
-    "june": 6,
-    "jul": 7,
-    "july": 7,
-    "aug": 8,
-    "august": 8,
-    "sep": 9,
-    "sept": 9,
-    "september": 9,
-    "oct": 10,
-    "october": 10,
-    "nov": 11,
-    "november": 11,
-    "dec": 12,
-    "december": 12,
+# Alternate headers seen in older / regional / KNC renamed reserved reports.
+COLUMN_ALIASES: Dict[str, List[str]] = {
+    "sku": ["SKU"],
+    "reserved_qty": ["Amazon Reserved", "amazon_reserved"],
+    "reserved_customerorders": ["Customer_reserved", "customer_reserved"],
+    "reserved_fc-transfers": ["FC_Transfer", "fc_transfer", "fc-transfer"],
+    "reserved_fc-processing": ["FC_Processing", "fc_processing"],
 }
 
-CHECKLIST_ALIAS_COLUMNS = [
-    "MSKU",
-    "SKU",
-    "Disposition",
-    "Condition_Type",
-    "Ending Warehouse Balance",
-    "Ending_Inventory",
+BASE_PIVOT_VALUES = [
+    "reserved_qty",
+    "reserved_customer_orders",
+    "reserved_fc_processing",
 ]
+
+FC_TRANSFERS_RAW = "reserved_fc-transfers"
+FC_TRANSFERS_SNAKE = "reserved_fc_transfers"
+
+# Markets that historically kept FC transfers longer (docs only — we keep for all).
+KEEP_FC_TRANSFERS_ALWAYS = {"AE", "IN"}
 
 
 # =============================================================================
 # Client configuration
 #   New client = copy a builder + register in CLIENT_CONFIGS.
-#   Fill geo_roots OR geo_folders + relative_ledger_path.
+#   Fill geo_roots (KNC-style) OR geo_folders + relative_inventory_path (ESH-style).
 # =============================================================================
 
 @dataclass
-class ClientLedgerConfig:
+class ClientReservedConfig:
     client_code: str
     client_id: str
     client_name: str
@@ -126,16 +113,16 @@ class ClientLedgerConfig:
     cogs_path: Path = field(default_factory=Path)
     cogs_sheets: Dict[str, str] = field(default_factory=dict)
     sku_backend: str = "esh"
-    title_contains: Dict[str, str] = field(default_factory=dict)
+    product_name_contains: Dict[str, str] = field(default_factory=dict)
     sku_source_by_geo: Dict[str, str] = field(default_factory=dict)
-    relative_ledger_path: Path = field(
-        default_factory=lambda: Path("input") / "amazon" / "inventory_ledger"
+    relative_inventory_path: Path = field(
+        default_factory=lambda: Path("input") / "amazon" / "reserved_inventory"
     )
 
 
-def _esh_config() -> ClientLedgerConfig:
+def _esh_config() -> ClientReservedConfig:
     ident = layouts.client_identity("ESH")
-    return ClientLedgerConfig(
+    return ClientReservedConfig(
         client_code=ident["client_code"],
         client_id=ident["client_id"],
         client_name=ident["client_name"],
@@ -143,36 +130,36 @@ def _esh_config() -> ClientLedgerConfig:
         layout=ident["layout"],
         geo_folders=dict(layouts.ESH_GEO_FOLDERS),
         cogs_path=layouts.cogs_path("ESH"),
-        cogs_sheets=layouts.cogs_sheets_for("ESH"),
+        cogs_sheets=layouts.cogs_sheets_for("ESH", channel="amazon"),
         sku_backend="esh",
     )
 
 
-def _knc_config() -> ClientLedgerConfig:
+def _knc_config() -> ClientReservedConfig:
     ident = layouts.client_identity("KNC")
     base = layouts.data_root("KNC")
-    return ClientLedgerConfig(
+    return ClientReservedConfig(
         client_code=ident["client_code"],
         client_id=ident["client_id"],
         client_name=ident["client_name"],
         base_path=base,
         layout=ident["layout"],
-        geo_roots=layouts.knc_geo_roots("ledger", base),
+        geo_roots=layouts.knc_geo_roots("reserved", base),
         cogs_path=layouts.cogs_path("KNC"),
-        cogs_sheets=layouts.cogs_sheets_for("KNC"),
+        cogs_sheets=layouts.cogs_sheets_for("KNC", channel="amazon"),
         sku_backend="knc",
-        title_contains={"AE": "Kinetica"},
+        product_name_contains={"AE": "Kinetica"},
         sku_source_by_geo={"AE": "amazon_ae"},
     )
 
 
-CLIENT_CONFIGS: Dict[str, Callable[[], ClientLedgerConfig]] = {
+CLIENT_CONFIGS: Dict[str, Callable[[], ClientReservedConfig]] = {
     "ESH": _esh_config,
     "KNC": _knc_config,
 }
 
 
-def get_client_config(client: str) -> ClientLedgerConfig:
+def get_client_config(client: str) -> ClientReservedConfig:
     key = str(client).strip().upper()
     if key not in CLIENT_CONFIGS:
         known = ", ".join(sorted(CLIENT_CONFIGS))
@@ -181,10 +168,10 @@ def get_client_config(client: str) -> ClientLedgerConfig:
 
 
 def output_dir_for(client_code: str) -> Path:
-    return paths.sanity_data_root() / client_code.upper() / "ledger"
+    return paths.sanity_data_root() / client_code.upper() / "reserved"
 
 
-def geo_code_label(geography: str, cfg: ClientLedgerConfig) -> str:
+def geo_code_label(geography: str, cfg: ClientReservedConfig) -> str:
     g = str(geography).strip()
     upper = g.upper()
     for code in cfg.cogs_sheets:
@@ -202,7 +189,7 @@ def geo_code_label(geography: str, cfg: ClientLedgerConfig) -> str:
 # =============================================================================
 
 def load_client_sku_mapping(
-    cfg: ClientLedgerConfig,
+    cfg: ClientReservedConfig,
     geography_code: Optional[str] = None,
 ) -> dict:
     geos = [geography_code] if geography_code else list(cfg.cogs_sheets.keys())
@@ -213,7 +200,7 @@ def load_client_sku_mapping(
 
 def clean_client_skus(
     df: pd.DataFrame,
-    cfg: ClientLedgerConfig,
+    cfg: ClientReservedConfig,
     geography_code: str,
     sku_mapping: Optional[dict] = None,
 ) -> pd.DataFrame:
@@ -232,10 +219,10 @@ def clean_client_skus(
 # =============================================================================
 
 def resolve_geo_targets(
-    cfg: ClientLedgerConfig,
+    cfg: ClientReservedConfig,
     geos: Optional[Sequence[str]] = None,
 ) -> List[Tuple[str, Path]]:
-    """Prefer geo_roots when set; else geo_folders + relative_ledger_path."""
+    """Prefer geo_roots when set; else geo_folders + relative_inventory_path."""
     wanted: Optional[Set[str]] = None
     if geos is not None:
         wanted = {str(g).strip().upper() for g in geos}
@@ -247,16 +234,16 @@ def resolve_geo_targets(
             if wanted is not None and code.upper() not in wanted:
                 continue
             if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Ledger path missing: {root}")
+                print(f"[WARN] [{cfg.client_code}] Reserved path missing: {root}")
                 continue
             targets.append((code, root))
     else:
         for folder, code in cfg.geo_folders.items():
             if wanted is not None and code.upper() not in wanted:
                 continue
-            root = cfg.base_path / folder / cfg.relative_ledger_path
+            root = cfg.base_path / folder / cfg.relative_inventory_path
             if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Ledger path missing: {root}")
+                print(f"[WARN] [{cfg.client_code}] Reserved path missing: {root}")
                 continue
             targets.append((code, root))
 
@@ -264,14 +251,14 @@ def resolve_geo_targets(
 
 
 def discover_year_folders(
-    ledger_root: Path,
+    inventory_root: Path,
     years: Optional[Sequence[str]] = None,
 ) -> List[Path]:
     allowed = set(VALID_YEARS)
     if years is not None:
         allowed &= {str(y) for y in years}
     found: List[Path] = []
-    for path in ledger_root.iterdir():
+    for path in inventory_root.iterdir():
         if path.is_dir() and path.name in allowed:
             found.append(path)
     return sorted(found, key=lambda p: p.name)
@@ -283,6 +270,8 @@ def is_ignored_file(file_path: Path) -> bool:
     if lower in IGNORE_FILE_NAMES:
         return True
     if any(name.startswith(prefix) for prefix in IGNORE_FILE_PREFIXES):
+        return True
+    if lower in {"reserved_inventory.csv", "reserved.csv"}:
         return True
     return False
 
@@ -307,7 +296,7 @@ def _month_filter_tokens(months: Optional[Sequence[str]]) -> Optional[Set[str]]:
     return tokens
 
 
-def discover_ledger_files(
+def discover_reserved_files(
     year_path: Path,
     months: Optional[Sequence[str]] = None,
 ) -> List[Path]:
@@ -317,7 +306,9 @@ def discover_ledger_files(
     wanted = _month_filter_tokens(months)
     files: List[Path] = []
     for path in year_path.rglob("*"):
-        if not path.is_file() or path.suffix.lower() != ".csv":
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
         if is_ignored_file(path):
             continue
@@ -336,15 +327,28 @@ def _hydrate_onedrive_file(file_path: Path) -> None:
         handle.read(1)
 
 
-def read_ledger_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
+def _read_csv_robust(file_path: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(file_path, encoding="utf-8")
+    except UnicodeDecodeError:
+        return pd.read_csv(file_path, encoding="latin1")
+
+
+def read_inventory_file(file_path: Path, retries: int = 3) -> pd.DataFrame:
     last_error: Optional[Exception] = None
     for attempt in range(1, retries + 1):
         try:
             _hydrate_onedrive_file(file_path)
-            try:
-                return pd.read_csv(file_path, encoding="utf-8")
-            except UnicodeDecodeError:
-                return pd.read_csv(file_path, encoding="latin1")
+            suffix = file_path.suffix.lower()
+            if suffix == ".csv":
+                return _read_csv_robust(file_path)
+            if suffix in {".xlsx", ".xls"}:
+                return pd.read_excel(file_path)
+            if suffix == ".ndjson":
+                return pd.read_json(file_path, lines=True, encoding="utf-8")
+            if suffix == ".json":
+                return pd.read_json(file_path, encoding="utf-8")
+            raise ValueError(f"Unsupported file extension: {suffix}")
         except OSError as exc:
             last_error = exc
             if getattr(exc, "errno", None) != 22 and getattr(exc, "winerror", None) != 22:
@@ -364,176 +368,203 @@ def read_ledger_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
 
 
 # =============================================================================
-# Checklist aliases + date cleaning (exact ledger_database / notebook logic)
+# Transform (ETL — do not change formulas when cleaning style)
 # =============================================================================
 
-def _resolve_alias_column(df: pd.DataFrame, canonical: str) -> Optional[str]:
-    if canonical in df.columns:
-        return canonical
-    lowered = {str(c).strip().lower().replace(" ", "_"): c for c in df.columns}
-    key = canonical.strip().lower().replace(" ", "_")
-    return lowered.get(key)
-
-
-def ensure_checklist_alias_columns(df: pd.DataFrame) -> pd.DataFrame:
+def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    out.columns = [
-        str(c).replace("\ufeff", "").strip().strip('"').strip("'") for c in out.columns
-    ]
-
-    for canonical in CHECKLIST_ALIAS_COLUMNS:
-        found = _resolve_alias_column(out, canonical)
-        if found is None:
-            out[canonical] = np.nan
-        elif found != canonical:
-            out[canonical] = out[found]
-
-    date_col = _resolve_alias_column(out, "Date")
-    if date_col is None:
-        raise KeyError("Expected Date column in ledger file")
-    if date_col != "Date":
-        out["Date"] = out[date_col]
+    out.columns = [_clean_col(c) for c in out.columns]
     return out
 
 
-def apply_checklist_aliases(df: pd.DataFrame) -> pd.DataFrame:
-    ledger_df = ensure_checklist_alias_columns(df)
-
-    ledger_df["sku"] = np.where(
-        ledger_df["MSKU"].isnull(), ledger_df["SKU"], ledger_df["MSKU"]
-    )
-    ledger_df["disposition"] = np.where(
-        ledger_df["Disposition"].isnull(),
-        ledger_df["Condition_Type"],
-        ledger_df["Disposition"],
-    )
-    ledger_df["ending_balance"] = np.where(
-        ledger_df["Ending Warehouse Balance"].isnull(),
-        ledger_df["Ending_Inventory"],
-        ledger_df["Ending Warehouse Balance"],
-    )
-
-    ledger_df = ledger_df.loc[:, ["Date", "sku", "disposition", "ending_balance"]]
-    ledger_df = ledger_df.loc[:, ~ledger_df.columns.duplicated()].copy()
-    return ledger_df
-
-
-def apply_ledger_date_cleaning(ledger_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    DATE CLEANING from ledger.ipynb — keep unchanged.
-    Includes intentional: month = day, day = month in to_datetime.
-    """
-    ledger_df = ledger_df.copy()
-    month_map = MONTH_MAP
-
-    date_parts = ledger_df["Date"].astype(str).str.split(r"[/-]", expand=True)
-    ledger_df["day"] = date_parts[0]
-    ledger_df["month"] = date_parts[1]
-    ledger_df["year"] = date_parts[2]
-
-    ledger_df["month"] = (
-        ledger_df["month"].astype(str).str.strip().str.lower().replace(month_map)
-    )
-
-    ledger_df["day"] = pd.to_numeric(ledger_df["day"], errors="coerce")
-    ledger_df["month"] = pd.to_numeric(ledger_df["month"], errors="coerce")
-    ledger_df["year"] = pd.to_numeric(ledger_df["year"], errors="coerce")
-    ledger_df["year"] = np.where(
-        ledger_df["year"] < 100,
-        ledger_df["year"] + 2000,
-        ledger_df["year"],
-    )
-
-    swap_mask = ledger_df["day"] > 12
-    ledger_df.loc[swap_mask, ["month", "day"]] = ledger_df.loc[
-        swap_mask, ["day", "month"]
-    ].values
-
-    ledger_df["date"] = pd.to_datetime(
-        {
-            "year": ledger_df["year"],
-            "month": ledger_df["day"],
-            "day": ledger_df["month"],
-        },
-        errors="coerce",
-    )
-    return ledger_df
-
-
-def _filter_title_if_needed(
-    df: pd.DataFrame,
-    cfg: ClientLedgerConfig,
-    geography_code: str,
-) -> pd.DataFrame:
-    needle = cfg.title_contains.get(geography_code)
-    if not needle:
-        return df
-
-    title_col = _resolve_alias_column(df, "Title")
-    if title_col is None:
+def _extract_date(df: pd.DataFrame) -> pd.Series:
+    source_col = None
+    for candidate in ("source_file", "Source.Name", "source_name"):
+        matches = [c for c in df.columns if str(c).strip().lower() == candidate.lower()]
+        if matches:
+            source_col = matches[0]
+            break
+    if source_col is None:
         for c in df.columns:
-            if str(c).strip().lower() == "title":
-                title_col = c
+            if to_snake(_clean_col(c)) in {"source_file", "source_name"}:
+                source_col = c
                 break
-    if title_col is None:
-        print(f"  [{geography_code}] WARN: Title filter requested but Title column missing")
-        return df
+    if source_col is None:
+        raise KeyError("Expected source_file or Source.Name column for date extraction")
 
-    before = len(df)
-    out = df[
-        df[title_col].astype(str).str.contains(needle, case=False, na=False)
-    ].copy()
-    print(f"  [{geography_code}] Title filter '{needle}': {before:,} -> {len(out):,}")
+    date_raw = (
+        df[source_col]
+        .astype(str)
+        .str.extract(r"(\d{2}-[A-Za-z]{3}-\d{4})", expand=False)
+    )
+    return pd.to_datetime(date_raw, format="%d-%b-%Y", errors="coerce").dt.strftime(
+        "%Y-%m-%d"
+    )
+
+
+def _ensure_column(df: pd.DataFrame, name: str) -> None:
+    if name not in df.columns:
+        df[name] = np.nan
+
+
+def coalesce_reserved_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Unify alternate reserved headers into canonical Amazon names."""
+    out = df.copy()
+    for target, alternates in COLUMN_ALIASES.items():
+        _ensure_column(out, target)
+        for alt in alternates:
+            if alt not in out.columns:
+                continue
+            out[target] = np.where(out[target].isna(), out[alt], out[target])
+
+    if "reserved_customerorders" in out.columns:
+        out = out.rename(
+            columns={"reserved_customerorders": "reserved_customer_orders"}
+        )
     return out
+
+
+def pivot_values_for() -> List[str]:
+    cols = list(BASE_PIVOT_VALUES)
+    if FC_TRANSFERS_SNAKE not in cols:
+        if "reserved_customer_orders" in cols:
+            idx = cols.index("reserved_customer_orders") + 1
+            cols.insert(idx, FC_TRANSFERS_SNAKE)
+        else:
+            cols.append(FC_TRANSFERS_SNAKE)
+    return cols
 
 
 def transform_geography_frame(
     geo_df: pd.DataFrame,
-    cfg: ClientLedgerConfig,
+    cfg: ClientReservedConfig,
     geography_code: str,
     sku_mapping: Optional[dict] = None,
 ) -> pd.DataFrame:
     if geo_df.empty:
         return pd.DataFrame()
 
-    work = _filter_title_if_needed(geo_df, cfg, geography_code)
-    ledger_df = apply_checklist_aliases(work)
+    reserved_fba = _normalize_headers(geo_df)
+    reserved_fba["date"] = _extract_date(reserved_fba)
 
-    # Keep SELLABLE only
-    ledger_df = ledger_df.drop(ledger_df[ledger_df["disposition"] != "SELLABLE"].index)
+    # Optional product-name filter (e.g. KNC AE → "Kinetica")
+    needle = cfg.product_name_contains.get(geography_code)
+    if needle:
+        name_col = None
+        for cand in ("product-name", "product_name", "Product Name"):
+            matches = [
+                c for c in reserved_fba.columns if str(c).strip().lower() == cand.lower()
+            ]
+            if matches:
+                name_col = matches[0]
+                break
+        if name_col is None:
+            for c in reserved_fba.columns:
+                if to_snake(_clean_col(c)) == "product_name":
+                    name_col = c
+                    break
+        if name_col:
+            before = len(reserved_fba)
+            reserved_fba = reserved_fba[
+                reserved_fba[name_col]
+                .astype(str)
+                .str.contains(needle, case=False, na=False)
+            ].copy()
+            print(
+                f"  [{geography_code}] product_name filter '{needle}': "
+                f"{before:,} -> {len(reserved_fba):,}"
+            )
+
+    reserved_fba = coalesce_reserved_columns(reserved_fba)
+
+    if FC_TRANSFERS_RAW not in reserved_fba.columns:
+        reserved_fba[FC_TRANSFERS_RAW] = 0
+        note = (
+            "always-keep market"
+            if geography_code in KEEP_FC_TRANSFERS_ALWAYS
+            else "Jul+ schema / KNC rename"
+        )
+        print(f"  [{geography_code}] Note: {FC_TRANSFERS_RAW} missing ({note}) — filled with 0")
+    else:
+        reserved_fba[FC_TRANSFERS_RAW] = pd.to_numeric(
+            reserved_fba[FC_TRANSFERS_RAW], errors="coerce"
+        ).fillna(0)
+
+    reserved_fba["geography"] = geography_code
+
+    keep_raw = [
+        "geography",
+        "sku",
+        "date",
+        "reserved_qty",
+        "reserved_customer_orders",
+        FC_TRANSFERS_RAW,
+        "reserved_fc-processing",
+    ]
+    for col in keep_raw:
+        if col not in reserved_fba.columns:
+            if col in {
+                FC_TRANSFERS_RAW,
+                "reserved_fc-processing",
+                "reserved_qty",
+                "reserved_customer_orders",
+            }:
+                reserved_fba[col] = 0
+            elif col == "sku":
+                reserved_fba[col] = np.nan
+            else:
+                raise KeyError(f"Missing columns for {geography_code}: {[col]}")
+
+    reserved_fba = reserved_fba.loc[:, keep_raw]
+    reserved_fba.columns = [
+        c if c == "geography" else to_snake(c) for c in reserved_fba.columns
+    ]
+
+    for col in [
+        "reserved_qty",
+        "reserved_customer_orders",
+        FC_TRANSFERS_SNAKE,
+        "reserved_fc_processing",
+    ]:
+        if col in reserved_fba.columns:
+            reserved_fba[col] = pd.to_numeric(reserved_fba[col], errors="coerce").fillna(0)
+
+    reserved_fba["sku"] = reserved_fba["sku"].astype(str).str.replace(
+        r"-{1,2}$", "", regex=True
+    )
 
     if sku_mapping is None:
         sku_mapping = load_client_sku_mapping(cfg, geography_code)
 
-    ledger_df = clean_client_skus(
-        ledger_df, cfg, geography_code, sku_mapping=sku_mapping
+    reserved_fba = clean_client_skus(
+        reserved_fba, cfg, geography_code, sku_mapping=sku_mapping
+    )
+    reserved_fba = reserved_fba.dropna(subset=["sku"])
+    reserved_fba = reserved_fba.drop_duplicates().reset_index(drop=True)
+
+    value_cols = [c for c in pivot_values_for() if c in reserved_fba.columns]
+    reserved_fba = (
+        pd.pivot_table(
+            reserved_fba,
+            index=["geography", "date", "sku"],
+            values=value_cols,
+            aggfunc="sum",
+        )
+        .reset_index()
     )
 
-    # Exact notebook date logic
-    ledger_df = apply_ledger_date_cleaning(ledger_df)
+    reserved_fba["client"] = cfg.client_code
+    reserved_fba["client_id"] = cfg.client_id
+    reserved_fba["platform"] = "amazon"
 
-    ledger_df["ending_balance"] = pd.to_numeric(
-        ledger_df["ending_balance"], errors="coerce"
-    ).fillna(0)
-    ledger_df = ledger_df.dropna(subset=["sku", "date"])
-
-    ledger_daily = (
-        ledger_df.groupby(["sku", "date"])["ending_balance"].sum().reset_index()
-    )
-    ledger_daily["geography"] = geography_code
-    ledger_daily["client"] = cfg.client_code
-    ledger_daily["client_id"] = cfg.client_id
-    ledger_daily["platform"] = "amazon"
-    ledger_daily = ledger_daily.loc[
-        :,
-        ["client", "client_id", "geography", "platform", "date", "sku", "ending_balance"],
-    ]
-    return ledger_daily.drop_duplicates().reset_index(drop=True)
+    front = ["client", "client_id", "geography", "platform", "date", "sku"]
+    rest = [c for c in reserved_fba.columns if c not in front]
+    return reserved_fba.loc[:, front + rest]
 
 
-def transform_ledger(
+def transform_reserved(
     raw_df: pd.DataFrame,
-    cfg: ClientLedgerConfig,
+    cfg: ClientReservedConfig,
 ) -> pd.DataFrame:
     if raw_df.empty:
         return pd.DataFrame()
@@ -547,7 +578,7 @@ def transform_ledger(
             cleaned = transform_geography_frame(
                 geo_df, cfg=cfg, geography_code=code, sku_mapping=sku_mapping
             )
-            print(f"  Result: {len(cleaned):,} daily rows")
+            print(f"  Result: {len(cleaned):,} pivoted rows")
             if not cleaned.empty:
                 frames.append(cleaned)
         except Exception as exc:  # noqa: BLE001
@@ -571,7 +602,7 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\n>>> STEP: save per-geography ledger → {output_dir}")
+    print(f"\n>>> STEP: save per-geography reserved → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
@@ -600,29 +631,37 @@ def process_year_folder(
 ) -> List[pd.DataFrame]:
     client = str(client_code).strip().upper() or "?"
     frames: List[pd.DataFrame] = []
-    for file_path in discover_ledger_files(year_path, months=months):
+    for file_path in discover_reserved_files(year_path, months=months):
         resolved = file_path.resolve()
         if resolved in processed_files:
             continue
 
-        print(f"[{client}] [{geography_code}] [{year}] Reading {file_path.name}")
+        parent = file_path.parent.name
+        month_label = parent if parent != year else "files"
+
+        print(f"[{client}] [{geography_code}] [{year}] [{month_label}] Reading {file_path.name}")
         try:
-            df = read_ledger_csv(file_path)
+            df = read_inventory_file(file_path)
             df = df.copy()
             df["geography"] = geography_code
             df["year"] = int(year) if str(year).isdigit() else year
+            df["month"] = month_label
             df["source_file"] = file_path.name
             df["source_path"] = str(resolved)
             frames.append(df)
             processed_files.add(resolved)
             stats.record_file_ok(geography_code, year, len(df))
         except Exception as exc:  # noqa: BLE001
-            print(f"[{client}] [{geography_code}] [{year}] ERROR reading {file_path.name}: {exc}")
+            print(
+                f"[{client}] [{geography_code}] [{year}] [{month_label}] "
+                f"ERROR reading {file_path.name}: {exc}"
+            )
             failed_files.append(
                 {
                     "path": str(resolved),
                     "geography": geography_code,
                     "year": year,
+                    "month": month_label,
                     "error": str(exc),
                 }
             )
@@ -633,7 +672,7 @@ def process_year_folder(
     return frames
 
 
-def build_ledger_dataframe(
+def build_reserved_dataframe(
     client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     years: Optional[Sequence[str]] = None,
@@ -668,11 +707,11 @@ def build_ledger_dataframe(
     processed_files: Set[Path] = set()
     stats = LoadStats()
 
-    print("\n>>> STEP: load raw ledger files")
-    for geo_code, ledger_root in resolve_geo_targets(cfg, geos):
+    print("\n>>> STEP: load raw reserved files")
+    for geo_code, inventory_root in resolve_geo_targets(cfg, geos):
         stats.geographies.add(geo_code)
-        print(f"  geo root [{geo_code}]: {ledger_root}")
-        for year_path in discover_year_folders(ledger_root, years=years):
+        print(f"  geo root [{geo_code}]: {inventory_root}")
+        for year_path in discover_year_folders(inventory_root, years=years):
             year = year_path.name
             stats.year_folders.add(f"{geo_code}/{year}")
             all_frames.extend(
@@ -692,10 +731,10 @@ def build_ledger_dataframe(
         pd.concat(all_frames, ignore_index=True, sort=False) if all_frames else pd.DataFrame()
     )
     master_df = new_df
-    run_log = ReportRunLog(cfg.client_code, "ledger")
+    run_log = ReportRunLog(cfg.client_code, "reserved")
     try:
         summary = stats.print_summary(
-            title=f"{cfg.client_code} Ledger Inventory Load Summary"
+            title=f"{cfg.client_code} Reserved Inventory Load Summary"
         )
         run_log.append(summary)
 
@@ -709,8 +748,8 @@ def build_ledger_dataframe(
                 run_log.append(line)
 
         if apply_transform and not new_df.empty:
-            print("\n>>> STEP: transform (aliases + date clean + daily agg)")
-            new_df = transform_ledger(new_df, cfg=cfg)
+            print("\n>>> STEP: transform (coalesce + SKU clean + pivot)")
+            new_df = transform_reserved(new_df, cfg=cfg)
             print(f"Transformed new slice shape: {new_df.shape}")
 
         if merge_existing:
@@ -731,7 +770,7 @@ def build_ledger_dataframe(
             check_final_dataframe_new_skus(
                 master_df,
                 client=cfg.client_code,
-                label="ledger",
+                label="reserved",
                 run_log=run_log,
             )
 
@@ -750,7 +789,7 @@ def build_ledger_dataframe(
 # =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Client-wise ledger inventory combiner")
+    parser = argparse.ArgumentParser(description="Client-wise reserved inventory combiner")
     parser.add_argument("--client", default=CLIENT, choices=sorted(CLIENT_CONFIGS.keys()))
     parser.add_argument("--geos", default=None, help="Comma-separated geo codes")
     parser.add_argument("--years", default=None, help="Comma-separated years")
@@ -766,7 +805,7 @@ def main(argv: Optional[Sequence[str]] = None) -> Tuple[pd.DataFrame, List[dict]
     years = [y.strip() for y in args.years.split(",")] if args.years else None
     months = [m.strip() for m in args.months.split(",")] if args.months else None
 
-    master_df, failed_files, _stats = build_ledger_dataframe(
+    master_df, failed_files, _stats = build_reserved_dataframe(
         client=args.client,
         geos=geos,
         years=years,
@@ -804,5 +843,5 @@ def run(
 
 
 if __name__ == "__main__":
-    master_ledger_df, failed_files = main()
-    print_script_completed("ledger_report")
+    master_reserved_df, failed_files = main()
+    print_script_completed("reserved_report")

@@ -1,67 +1,129 @@
-# Per-client geography settings (COGS sheet, currency, Amazon sales channel)
+# Per-client geography settings (geo × channel).
+#
+# Same client + same geo can have multiple channels (amazon, shopify, …).
+# Report COGS always resolve to local files (never Excel):
+#   cogs/{client}/{geo}_{channel}_cogs.parquet|.csv
+#   e.g. cogs/knc/uk_amazon_cogs.csv , cogs/knc/uk_shopify_cogs.csv
+#
+# excel_sheet = optional legacy workbook sheet name for want_to_update (Excel → Azure) only.
+# orders_sales_channel = Amazon (and similar) sales-channel filter for that channel.
+# markets / vendors = Shopify Market + Product vendor filters for that channel.
 geographies:
   ESH:
     US:
       country_code: US
-      cogs_sheet_name: ESH-USA
       country_currency: USD
-      orders_sales_channel: Amazon.com
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: ESH-USA
+          orders_sales_channel: Amazon.com
     UK:
       country_code: UK
-      cogs_sheet_name: ESH-UK
       country_currency: GBP
-      orders_sales_channel: Amazon.co.uk
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: ESH-UK
+          orders_sales_channel: Amazon.co.uk
     DE:
       country_code: DE
-      cogs_sheet_name: ESH-DE
       country_currency: EUR
-      orders_sales_channel: Amazon.de
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: ESH-DE
+          orders_sales_channel: Amazon.de
     AE:
       country_code: AE
-      cogs_sheet_name: ESH-UAE
       country_currency: AED
-      orders_sales_channel: Amazon.ae
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: ESH-UAE
+          orders_sales_channel: Amazon.ae
     CA:
       country_code: CA
-      cogs_sheet_name: ESH-CA
       country_currency: CAD
-      orders_sales_channel: Amazon.ca
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: ESH-CA
+          orders_sales_channel: Amazon.ca
     IN:
       country_code: IN
-      cogs_sheet_name: ESH-IN
       country_currency: INR
-      orders_sales_channel: Amazon.in
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: ESH-IN
+          orders_sales_channel: Amazon.in
 
   KNC:
     UK:
       country_code: UK
-      cogs_sheet_name: Main
       country_currency: GBP
-      orders_sales_channel: Amazon.co.uk
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: Main
+          orders_sales_channel: Amazon.co.uk
+        shopify:
+          excel_sheet: Shopify
+          # Shopify CSV: Market + Product vendor (renamed sales-channel in ETL)
+          markets:
+            - United Kingdom
+          vendors:
+            - Kinetica - UK
+            - Kinetica Sports UK
+    IE:
+      country_code: IE
+      country_currency: EUR
+      enabled: true
+      default_channel: shopify
+      channels:
+        shopify:
+          excel_sheet: Shopify
+          markets:
+            - Ireland
+            - International
+          vendors:
+            - Kinetica - IE
+            - Kinetica Sports
+            - Kinetica Sports IE
     DE:
       country_code: DE
-      cogs_sheet_name: Germany-COGS
       country_currency: EUR
-      orders_sales_channel: Amazon.de
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: Germany-COGS
+          orders_sales_channel: Amazon.de
     AE:
       country_code: AE
-      cogs_sheet_name: KCA-AE
       country_currency: AED
-      orders_sales_channel: Amazon.ae
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: KCA-AE
+          orders_sales_channel: Amazon.ae
 
   EMM:
     AE:
       country_code: AE
-      cogs_sheet_name: EMAMI-AE
       country_currency: AED
-      orders_sales_channel: Amazon.ae
       enabled: true
+      default_channel: amazon
+      channels:
+        amazon:
+          excel_sheet: EMAMI-AE
+          orders_sales_channel: Amazon.ae

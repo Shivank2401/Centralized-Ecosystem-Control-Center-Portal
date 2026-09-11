@@ -15,6 +15,7 @@ Configs resolve `data_root` / `cogs_path` from `.env` via `config_manager.layout
 | ageing | `amazon_reports.ageing_report` | `sanity_data/{CLIENT}/ageing/` |
 | ledger | `amazon_reports.ledger_report` | `sanity_data/{CLIENT}/ledger/` |
 | order | `amazon_reports.orders_report` | `sanity_data/{CLIENT}/orders/` |
+| shopify_orders | `shopify_reports.orders_report` | `sanity_data/KNC/orders/{GEO}_shopify_orders_database.*` |
 | inventory_database | `amazon_reports.inventory_database` | `sanity_data/{CLIENT}/inventory_database/` |
 | item_master | `item_master.item_master_manager` | Azure + local `item_master/` cache |
 | a_meir_finance | `finance.a_meir_finance_report` | Inventory Reconciles + Closing Stock Analyzer |

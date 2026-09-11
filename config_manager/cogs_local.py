@@ -4,9 +4,11 @@ Local standardized COGS slices under the project folder:
   cogs/{client}/{country}_{channel}_cogs.parquet  (preferred)
   cogs/{client}/{country}_{channel}_cogs.csv      (fallback)
 
-Produced by ``supply_chain.d_download_cogs`` (Azure → local).
+Produced by ``helper_files_nd_saving.download_cogs`` (Azure → local).
 Azure is refreshed by ``want_to_update.esh_cogs`` / ``knc_cogs`` (Excel → blob).
-Consumed by SKU cleaners, sanity reports, shipping queues, etc.
+
+Report consumers MUST use this module (not ESH_COGS_PATH / KNC_COGS_PATH Excel).
+Channel selection is driven by ``geography.yaml`` (`cogs_channel` / `cogs_channels`).
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import pandas as pd
 
 from config_manager import layouts
 from config_manager import paths as cfg_paths
+from config_manager.loader import load_geographies
 
 
 def _to_snake(name: str) -> str:
@@ -43,19 +46,50 @@ def cogs_slice_stem(country: str, channel: str = "amazon") -> str:
     return f"{str(country).strip().lower()}_{str(channel).strip().lower()}_cogs"
 
 
+def geo_cogs_meta(client: str, geography: str) -> Dict[str, object]:
+    """Return default channel / excel sheets for a geo from geography.yaml."""
+    geos = load_geographies(client)
+    g = geos.get(str(geography).strip().upper())
+    if g is None:
+        return {"channel": "amazon", "sheet_name": None, "channels": {}}
+    return {
+        "channel": g.default_channel or "amazon",
+        "sheet_name": g.cogs_sheet_name,
+        "channels": dict(g.cogs_channels or {}),
+    }
+
+
+def resolve_channel(
+    client: str,
+    geography: str,
+    *,
+    channel: Optional[str] = None,
+) -> str:
+    """
+    Resolve local COGS channel for a geo.
+
+    - Explicit ``channel`` wins (e.g. Shopify reports force ``shopify`` for UK).
+    - Else ``geography.yaml`` → ``default_channel``.
+    Local file is always ``{geo}_{channel}_cogs.*`` under ``cogs/{client}/``.
+    """
+    if channel is not None and str(channel).strip():
+        return str(channel).strip().lower()
+    meta = geo_cogs_meta(client, geography)
+    return str(meta.get("channel") or "amazon").strip().lower() or "amazon"
+
+
 def resolve_cogs_slice_path(
     client: str,
     country: str,
-    channel: str = "amazon",
+    channel: Optional[str] = None,
 ) -> Path:
     """
     Prefer parquet, then csv under cogs/{client}/.
-    Accepts lowercase or uppercase country in the filename stem.
-    Raises FileNotFoundError if neither exists.
+    Channel defaults from geography.yaml when omitted.
     """
+    ch = resolve_channel(client, country, channel=channel)
     base = client_cogs_dir(client)
     cc = str(country).strip()
-    ch = str(channel).strip().lower()
     stems = []
     for geo in (cc.lower(), cc.upper(), cc):
         stem = f"{geo}_{ch}_cogs"
@@ -73,9 +107,9 @@ def resolve_cogs_slice_path(
 
     expected = f"{cc.lower()}_{ch}_cogs.parquet|.csv"
     raise FileNotFoundError(
-        f"Local COGS missing for {client.upper()} {country}/{channel}. "
+        f"Local COGS missing for {client.upper()} {country}/{ch}. "
         f"Expected {expected} under {base}. "
-        f"Run Stage supply_chain → Download COGS "
+        f"Run Stage helper_files_nd_saving → Download COGS "
         f"(after want_to_update → {client.upper()} COGS uploaded to Azure)."
     )
 
@@ -83,10 +117,11 @@ def resolve_cogs_slice_path(
 def read_cogs_slice(
     client: str,
     country: str,
-    channel: str = "amazon",
+    channel: Optional[str] = None,
 ) -> pd.DataFrame:
     """Load one geo/channel COGS frame with snake_case columns."""
-    path = resolve_cogs_slice_path(client, country, channel)
+    ch = resolve_channel(client, country, channel=channel)
+    path = resolve_cogs_slice_path(client, country, channel=ch)
     if path.suffix.lower() == ".parquet":
         df = pd.read_parquet(path)
     else:
@@ -104,8 +139,12 @@ def sheet_names_to_geos(
     """Map legacy Excel sheet names (or bare geo codes) → geography codes."""
     sheets_map = layouts.cogs_sheets_for(client)
     reverse = {str(v).strip(): str(k).upper() for k, v in sheets_map.items()}
-    # also allow case-insensitive sheet match
     reverse_ci = {str(v).strip().lower(): str(k).upper() for k, v in sheets_map.items()}
+    # Also match optional cogs_channels values
+    for geo, cfg in load_geographies(client).items():
+        for sheet in (cfg.cogs_channels or {}).values():
+            reverse.setdefault(str(sheet).strip(), geo)
+            reverse_ci.setdefault(str(sheet).strip().lower(), geo)
     known_geos = {str(k).upper() for k in sheets_map}
 
     out: List[str] = []
@@ -154,19 +193,21 @@ def load_cogs_frames(
     *,
     geos: Optional[Sequence[str]] = None,
     sheet_names: Optional[Sequence[str]] = None,
-    channel: str = "amazon",
+    channel: Optional[str] = None,
     columns: Optional[Sequence[str]] = None,
 ) -> pd.DataFrame:
     """
     Concat local COGS slices for the client.
 
-    ``columns`` if set: keep only those snake_case columns that exist.
+    When ``channel`` is None, each geo uses ``geography.yaml`` → ``cogs_channel``
+    (so KNC IE loads shopify, UK loads amazon, etc.).
     """
     wanted = resolve_geos(client, geos=geos, sheet_names=sheet_names)
     frames: List[pd.DataFrame] = []
     for geo in wanted:
+        ch = resolve_channel(client, geo, channel=channel)
         try:
-            df = read_cogs_slice(client, geo, channel=channel)
+            df = read_cogs_slice(client, geo, channel=ch)
         except FileNotFoundError as exc:
             print(f"[WARN] {exc}")
             continue
@@ -174,7 +215,10 @@ def load_cogs_frames(
             keep = [c for c in columns if c in df.columns]
             missing = [c for c in columns if c not in df.columns]
             if missing:
-                print(f"[WARN] {client.upper()} {geo} COGS missing columns {missing} — skipping")
+                print(
+                    f"[WARN] {client.upper()} {geo}/{ch} COGS missing columns "
+                    f"{missing} — skipping"
+                )
                 continue
             df = df.loc[:, keep].copy()
         frames.append(df)

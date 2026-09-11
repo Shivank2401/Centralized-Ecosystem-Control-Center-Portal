@@ -1,60 +1,45 @@
-# COGS export (ESH + KNC)
+# COGS + geography (geo × channel)
 
-## Update Azure (Excel → blob)
-Modules under `report_script/want_to_update/`:
-- `esh_cogs.py` — ESH sheets → Azure only
-- `knc_cogs.py` — KNC sheets → Azure only
-- Shared I/O: `cogs_io.py`
+## Model
+Same client + same geo can have **multiple channels** (amazon, shopify, …).
 
-## Download local (Azure → project `cogs/`)
-Module: `report_script/supply_chain/d_download_cogs.py`
-
-Writes:
-```
-cogs/{esh|knc}/{stem}_cogs.parquet|.csv
-```
-
-## Inputs (upload)
-| Client | Env | Sheets |
-|--------|-----|--------|
-| ESH | `ESH_COGS_PATH` | ESH-UK, ESH-CA, ESH-USA, ESH-UAE, ESH-IN, ESH-DE |
-| KNC | `KNC_COGS_PATH` | Main (UK amazon), Shopify (UK + IE shopify), Germany-COGS, KCA-AE |
-
-`client_id` comes from `client.yaml`.
-
-## Consumer source (report scripts)
-SKU mapping / master SKU lookups use local slices via `config_manager.cogs_local`:
-
-```
-cogs/{esh|knc}/{country}_amazon_cogs.parquet
+```yaml
+KNC:
+  UK:
+    country_currency: GBP
+    default_channel: amazon
+    channels:
+      amazon:
+        excel_sheet: Main              # upload-only
+        orders_sales_channel: Amazon.co.uk
+      shopify:
+        excel_sheet: Shopify           # upload-only
+        markets: [United Kingdom]
+        vendors: [Kinetica - UK, Kinetica Sports UK]
 ```
 
-Refresh local copies with **Download COGS** before relying on SKU cleaners.
+## Local COGS (reports)
+Always:
 
-Wired through:
-- `esh_sku_cleaning` / `knc_sku_cleaning` (`load_cogs_helper_frame`, `load_sku_mapping`)
-- common sanity reports (ageing, ledger, manage_fba, reserved, orders)
-- `amazon_reports.new_sku_check`
-- shipping queues (local first, Azure fallback)
-
-## Azure
-- Container: `COGS_AZURE_CONTAINER` → else `ITEM_MASTER_CONTAINER` → else `app-helper`
-- Blob prefixes: `thrive-client-ecosoulhome/cogs/` (ESH), `thrive-client-kinetica/cogs/` (KNC)
-- USA Azure CSV stem stays `usa_amazon_cogs` (parquet uses `us_amazon`)
-
-No MySQL upload.
-
-## Run
-```bash
-# Upload Excel → Azure
-python report_script/want_to_update/esh_cogs.py --geos UK,US
-python report_script/want_to_update/knc_cogs.py --geos UK,DE
-
-# Download Azure → local cogs/{client}/
-python report_script/supply_chain/d_download_cogs.py --client ESH
-python report_script/supply_chain/d_download_cogs.py --client ALL
+```
+cogs/{client}/{geo}_{channel}_cogs.parquet|.csv
 ```
 
-Pipeline:
-- Stage **want_to_update** → ESH COGS / KNC COGS (Azure upload)
-- Stage **supply_chain** → Download COGS (Azure → local)
+No need to store the filename in YAML — channel name *is* the stem.
+
+| Client | Geo | Channel | File |
+|--------|-----|---------|------|
+| KNC | UK | amazon | `cogs/knc/uk_amazon_cogs.*` |
+| KNC | UK | shopify | `cogs/knc/uk_shopify_cogs.*` |
+| KNC | IE | shopify | `cogs/knc/ie_shopify_cogs.*` |
+
+## Filters
+| Channel | Field | Used by |
+|---------|-------|---------|
+| amazon | `orders_sales_channel` | Amazon orders sales-channel filter |
+| shopify | `markets` + `vendors` | Shopify Market + Product vendor filters |
+
+Shopify orders reads filters from `geography.yaml` → `channels.shopify` (not hardcoded).
+
+## Excel workbook
+`ESH_COGS_PATH` / `KNC_COGS_PATH` + `excel_sheet` are for **want_to_update** (Excel → Azure) only.

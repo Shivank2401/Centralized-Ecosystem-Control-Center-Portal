@@ -69,6 +69,10 @@ Centralized Ecosystem Portal/
 │   │   ├── inventory_database.py
 │   │   ├── new_sku_check.py
 │   │   └── run_logs.py           # ReportRunLog → sanity_data/{CLIENT}/logs/
+│   ├── shopify_reports/          # Stage: shopify_reports (KNC UK+IE); CLIENT_CONFIGS
+│   │   ├── orders_report.py      # Shopify orders → {GEO}_shopify_orders_database
+│   │   ├── inventory_shopify.py  # Shopify inventory → manage_fba/{GEO}_inventory_shopify
+│   │   └── ledger_shopify.py     # Shopify ledger → ledger/{GEO}_shopify_ledger_inventory
 │   ├── helper_files_nd_saving/   # Stage: helper files (ex “Supply Chain”); >>> STEP + CLIENT_CONFIGS
 │   │   ├── all_helper_files.py / threeG_nd_updike.py  # ESH (CLIENT_CONFIGS); WH standard files
 │   │   ├── saving_raw_file_on_date.py  # ESH + KNC dated archives (notebook-style steps)
@@ -209,7 +213,7 @@ python run_pipeline.py --sequence morning_esh_common
 | File | Role |
 |------|------|
 | `client.yaml` | Client code, name, `client_id`, `enabled`, `data_root_env`, `cogs_path_env`, `layout`, `geographies` |
-| `geography.yaml` | Per client → per geo: COGS sheet, currency, channel, `enabled` |
+| `geography.yaml` | Per client → per geo × **channel**: local COGS stem `{geo}_{channel}_cogs`, Amazon `orders_sales_channel`, Shopify `markets`/`vendors`, optional `excel_sheet` (upload only) |
 | `report.yaml` | `report_stages` + reports (`stage`, optional `clients`, `module`, `menu_order`, `output_subdir`) |
 | `run_sequences.yaml` | Saved sequences (clients + geos + ordered reports) — CLI + Portal |
 | `paths.py` | Resolve `*_DATA_ROOT`, COGS, `SANITY_DATA_ROOT`, retail/revenue/walmart, pincode, … |
@@ -225,7 +229,8 @@ Report `stage` strings in YAML may not match `report_stages` keys. Aliases:
 
 | Report `stage` value | Resolves to stage key |
 |----------------------|------------------------|
-| `Common Sanity Reports` / `amazon_reportss` | `common` |
+| `amazon_reports` / `Amazon Reports` | `common` |
+| `Common Sanity Reports` / `common_sanity_report` / `amazon_reportss` | `common` (legacy) |
 | `Supply Chain` / `supply_chain` | `helper_files_nd_saving` |
 
 Without aliases, portal stage counts show **0 reports** for those packages.
@@ -258,6 +263,9 @@ Default root: `Centralized Ecosystem Portal/sanity_data/`
 | `ledger` | `{CLIENT}/ledger/` | `{GEO}_ledger_inventory.parquet` + `.csv` |
 | `order` | `{CLIENT}/orders/` | `{GEO}_orders_database.parquet` + `.csv` |
 | `order` (ASHU) | `{CLIENT}/orders_ASHU/` | `{GEO}_orders_ASHU.csv` (line-level + `promotion_ids`) |
+| `shopify_orders` | `{CLIENT}/orders/` | `{GEO}_shopify_orders_database.parquet` + `.csv` (not merged with Amazon) |
+| `shopify_inventory` | `{CLIENT}/manage_fba/` | `{GEO}_inventory_shopify.parquet` + `.csv` (alongside Amazon manage_fba; not merged) |
+| `shopify_ledger` | `{CLIENT}/ledger/` | `{GEO}_shopify_ledger_inventory.parquet` + `.csv` (alongside Amazon ledger; not merged) |
 | `inventory_database` | `{CLIENT}/inventory_database/` | `{GEO}_inventory_database.parquet` + `.csv` |
 | `vector_report` | `{CLIENT}/vector_report/` | `{geo}_{platform}_inventory_report.*` |
 | `emami_report` | `EMM/…` | Excel + CSV masters (see Emami brain note) |
@@ -313,6 +321,7 @@ On success (no exception):
 | Folder | Use for |
 |--------|---------|
 | `amazon_reports/` | Standard Amazon combiners (incl. orders + inventory DB) |
+| `shopify_reports/` | KNC Shopify orders + inventory + ledger (UK + IE); `*_shopify_orders_database` + `manage_fba/*_inventory_shopify` + `ledger/*_shopify_ledger_inventory` |
 | `helper_files_nd_saving/` | Helper files, 3G/Updike, raw archive (ESH + KNC), COGS download |
 | `requirement_specific/` | Built on `sanity_data` (vector, Emami, SC inventory) |
 | `want_to_update/` | COGS upload, pincode, invalid SKUs |
@@ -346,7 +355,7 @@ On success (no exception):
 
 Hide: `enabled: false`. Portal **Developer → Add Report** can also register uploads.
 
-**Common sanity reports** (`amazon_reports/`): each combiner uses `CLIENT_CONFIGS` / overrides — add a new client by registering config (plus yaml/layouts), without changing ETL. Scripts print `>>> STEP` for easier debugging.
+**Amazon reports** (`amazon_reports/`): each combiner uses `CLIENT_CONFIGS` / overrides — add a new client by registering config (plus yaml/layouts), without changing ETL. Scripts print `>>> STEP` for easier debugging.
 
 **MEIR finance** (`finance/a_meir_finance_report.py`): ESH-only today via `CLIENT_CONFIGS`; same `>>> STEP` style. Ageing / pivot formulas unchanged — new clients need path/layout registration first.
 

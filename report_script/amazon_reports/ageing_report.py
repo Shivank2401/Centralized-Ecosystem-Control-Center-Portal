@@ -1,11 +1,12 @@
 """
-Client-aware Amazon Manage FBA Inventory combiner.
+Client-aware Amazon FBA Inventory Ageing combiner.
 
 Covers:
   - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
-  - Source: manage_fba_inventory year-month folders; pivot AFN qty columns
-  - No FC-transfer col for ESH AE/IN and KNC AE; KNC AE filters Title "Kinetica"
-  - Outputs: sanity_data/{CLIENT}/manage_fba/{GEO}_manage_fba_inventory.parquet|.csv
+  - Source: amazon fba_inventory / KNC fba Inventory year-month folders
+  - SKU clean via esh_sku_cleaning / knc_sku_cleaning + COGS sheets
+  - Outputs: sanity_data/{CLIENT}/ageing/{GEO}_ageing_inventory.parquet
+  - Run log + new-SKU vs COGS under sanity_data/{CLIENT}/logs/
 
 Adding a NEW client (no ETL changes needed):
   1. Add client + geos in client.yaml / geography.yaml / layouts.py
@@ -15,9 +16,9 @@ Adding a NEW client (no ETL changes needed):
 Style: step-by-step prints (>>> STEP). ETL formulas unchanged.
 
 Run:
-    python report_script/amazon_reports/manage_fba_report.py
-    python report_script/amazon_reports/manage_fba_report.py --client ESH
-    python report_script/amazon_reports/manage_fba_report.py --client KNC --geos UK,DE,AE
+    python report_script/amazon_reports/ageing_report.py
+    python report_script/amazon_reports/ageing_report.py --client ESH
+    python report_script/amazon_reports/ageing_report.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
+import numpy as np
 import pandas as pd
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -40,11 +42,9 @@ from config_manager.report_helpers import (
     IGNORE_FILE_NAMES,
     IGNORE_FILE_PREFIXES,
     LoadStats,
-    SUPPORTED_EXTENSIONS,
-    _clean_col,
+    coalesce_snake_columns,
     load_existing_parquet_outputs,
     merge_append_dedupe,
-    to_snake,
 )
 from config_manager import esh_sku_cleaning, knc_sku_cleaning, paths
 from config_manager import layouts
@@ -56,87 +56,153 @@ from report_script.amazon_reports.run_logs import ReportRunLog
 
 
 # =============================================================================
-# Run knobs (defaults; CLI / pipeline can override)
+# Run knobs
 # =============================================================================
 
-CLIENT = "ESH"  # CLI default; pipeline passes client= via run()
+CLIENT = "KNC"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
 
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
 PROCESS_YEARS: Optional[List[str]] = [ "2026"]
-PROCESS_MONTHS: Optional[List[str]] = None  # e.g. ["jul"], ["Jul-2026"], ["apr"]
+PROCESS_MONTHS: Optional[List[str]] = None
 
 SAVE_OUTPUT = True
 APPLY_TRANSFORM = True
 MERGE_WITH_EXISTING = True
 
-PARQUET_NAME_SUFFIX = "manage_fba_inventory"
+PARQUET_NAME_SUFFIX = "ageing_inventory"
+MAX_DOS_CAP = 365
 DEDUPE_SUBSET = ["client", "geography", "date", "sku"]
 
-KEEP_COLS = [
-    "sku",
+
+# =============================================================================
+# Shared column sets (ESH notebook + KNC calculated cols)
+# =============================================================================
+
+FINAL_COLUMNS = [
     "date",
-    "afn-warehouse-quantity",
-    "afn-fulfillable-quantity",
-    "afn-unsellable-quantity",
-    "afn-reserved-quantity",
-    "afn-total-quantity",
-    "afn-inbound-working-quantity",
-    "afn-inbound-shipped-quantity",
-    "afn-inbound-receiving-quantity",
-    "afn-researching-quantity",
-    "afn-reserved-future-supply",
-    "afn-future-supply-buyable",
+    "sku",
+    "sell_thru",
+    "dos",  # calculated (KNC: DOS_2)
+    "available",
+    "fc_transfer",
+    "days_of_supply",  # Amazon native
+    "velocity_trend",
+    "velocity_trend_status",
+    "daily_velocity_t30",
+    "daily_velocity_t60",
+    "daily_velocity_t90",
+    "inv_age_0_to_30_days",
+    "inv_age_31_to_60_days",
+    "inv_age_61_to_90_days",
+    "inv_age_91_to_180_days",
+    "inv_age_181_to_270_days",
+    "inv_age_271_to_365_days",
+    "inv_age_365_plus_days",
+    "units_shipped_t7",
+    "units_shipped_t30",
+    "units_shipped_t60",
+    "units_shipped_t90",
+    "recommended_action",
+    "estimated_cost_savings_of_recommended_actions",
+    "estimated_storage_cost_next_month",
+    "healthy_inventory_level",
+    "quantity_to_be_charged_ais_181_210_days",
+    "estimated_ais_181_210_days",
+    "quantity_to_be_charged_ais_211_240_days",
+    "estimated_ais_211_240_days",
+    "quantity_to_be_charged_ais_241_270_days",
+    "estimated_ais_241_270_days",
+    "quantity_to_be_charged_ais_271_300_days",
+    "estimated_ais_271_300_days",
+    "quantity_to_be_charged_ais_301_330_days",
+    "estimated_ais_301_330_days",
+    "quantity_to_be_charged_ais_331_365_days",
+    "estimated_ais_331_365_days",
+    "estimated_ais_365_plus_days",
+    "quantity_to_be_charged_ais_366_455_days",
+    "estimated_ais_366_455_days",
+    "quantity_to_be_charged_ais_456_plus_days",
+    "estimated_ais_456_plus_days",
 ]
 
 PIVOT_VALUES = [
-    "afn_warehouse_quantity",
-    "afn_fulfillable_quantity",
-    "afn_unsellable_quantity",
-    "afn_reserved_quantity",
-    "afn_total_quantity",
-    "afn_inbound_working_quantity",
-    "afn_inbound_shipped_quantity",
-    "afn_inbound_receiving_quantity",
-    "afn_researching_quantity",
-    "afn_reserved_future_supply",
-    "afn_future_supply_buyable",
+    "healthy_inventory_level",
+    "days_of_supply",
+    "available",
+    "fc_transfer",
+    "inv_age_0_to_30_days",
+    "inv_age_31_to_60_days",
+    "inv_age_61_to_90_days",
+    "inv_age_91_to_180_days",
+    "inv_age_181_to_270_days",
+    "inv_age_271_to_365_days",
+    "inv_age_365_plus_days",
+    "units_shipped_t7",
+    "units_shipped_t30",
+    "units_shipped_t60",
+    "units_shipped_t90",
+    "recommended_action",
+    "estimated_cost_savings_of_recommended_actions",
+    "estimated_storage_cost_next_month",
+    "estimated_ais_365_plus_days",
+    "quantity_to_be_charged_ais_181_210_days",
+    "estimated_ais_181_210_days",
+    "quantity_to_be_charged_ais_211_240_days",
+    "estimated_ais_211_240_days",
+    "quantity_to_be_charged_ais_241_270_days",
+    "estimated_ais_241_270_days",
+    "quantity_to_be_charged_ais_271_300_days",
+    "estimated_ais_271_300_days",
+    "quantity_to_be_charged_ais_301_330_days",
+    "estimated_ais_301_330_days",
+    "quantity_to_be_charged_ais_331_365_days",
+    "estimated_ais_331_365_days",
+    "quantity_to_be_charged_ais_366_455_days",
+    "estimated_ais_366_455_days",
+    "quantity_to_be_charged_ais_456_plus_days",
+    "estimated_ais_456_plus_days",
 ]
 
-FC_TRANSFER_COL = "afn-fc-transfer-quantity"
-FC_TRANSFER_SNAKE = "afn_fc_transfer_quantity"
+# Short DE exports (2024/2025) use a reduced Amazon column set
+AGEING_COLUMN_ALIASES: Dict[str, str] = {
+    "reserved_fc_transfer": "fc_transfer",
+    "afn_fc_transfer_quantity": "fc_transfer",
+    "inventory_age_snapshot_date": "snapshot_date",
+    "inv_age_181_to_330_days": "inv_age_181_to_270_days",
+    "inv_age_331_to_365_days": "inv_age_271_to_365_days",
+    "quantity_to_be_charged_ais_365_plus_days": "quantity_to_be_charged_ais_456_plus_days",
+}
 
 
 # =============================================================================
 # Client configuration
-#   New client = copy one of the builders below + register in CLIENT_CONFIGS.
-#   layout "esh" → geo_folders + relative_inventory_path under data_root
-#   layout "knc" → geo_roots from layouts.knc_geo_roots(...)
+#   New client = copy a builder + register in CLIENT_CONFIGS.
+#   Fill geo_roots OR geo_folders + relative_ageing_path.
 # =============================================================================
 
 @dataclass
-class ClientManageFbaConfig:
+class ClientAgeingConfig:
     client_code: str
     client_id: str
     client_name: str
     base_path: Path
-    layout: str  # "esh" | "knc" (or any layout that fills geo_folders / geo_roots)
-    geo_folders: Dict[str, str] = field(default_factory=dict)  # folder -> code (ESH-style)
-    geo_roots: Dict[str, Path] = field(default_factory=dict)  # code -> manage root (KNC-style)
+    layout: str
+    geo_folders: Dict[str, str] = field(default_factory=dict)
+    geo_roots: Dict[str, Path] = field(default_factory=dict)
     cogs_path: Path = field(default_factory=Path)
     cogs_sheets: Dict[str, str] = field(default_factory=dict)
-    sku_backend: str = "esh"  # "esh" | "knc" (SKU cleaner module)
+    sku_backend: str = "esh"
     product_name_contains: Dict[str, str] = field(default_factory=dict)
     sku_source_by_geo: Dict[str, str] = field(default_factory=dict)
-    no_fc_transfer_geos: Set[str] = field(default_factory=set)
-    relative_inventory_path: Path = field(
-        default_factory=lambda: Path("input") / "amazon" / "manage_fba_inventory"
+    relative_ageing_path: Path = field(
+        default_factory=lambda: Path("input") / "amazon" / "fba_inventory"
     )
 
 
-def _esh_config() -> ClientManageFbaConfig:
+def _esh_config() -> ClientAgeingConfig:
     ident = layouts.client_identity("ESH")
-    return ClientManageFbaConfig(
+    return ClientAgeingConfig(
         client_code=ident["client_code"],
         client_id=ident["client_id"],
         client_name=ident["client_name"],
@@ -144,39 +210,36 @@ def _esh_config() -> ClientManageFbaConfig:
         layout=ident["layout"],
         geo_folders=dict(layouts.ESH_GEO_FOLDERS),
         cogs_path=layouts.cogs_path("ESH"),
-        cogs_sheets=layouts.cogs_sheets_for("ESH"),
+        cogs_sheets=layouts.cogs_sheets_for("ESH", channel="amazon"),
         sku_backend="esh",
-        no_fc_transfer_geos={"AE", "IN"},
     )
 
 
-def _knc_config() -> ClientManageFbaConfig:
+def _knc_config() -> ClientAgeingConfig:
     ident = layouts.client_identity("KNC")
     base = layouts.data_root("KNC")
-    return ClientManageFbaConfig(
+    return ClientAgeingConfig(
         client_code=ident["client_code"],
         client_id=ident["client_id"],
         client_name=ident["client_name"],
         base_path=base,
         layout=ident["layout"],
-        geo_roots=layouts.knc_geo_roots("manage_fba", base),
+        geo_roots=layouts.knc_geo_roots("ageing", base),
         cogs_path=layouts.cogs_path("KNC"),
-        cogs_sheets=layouts.cogs_sheets_for("KNC"),
+        cogs_sheets=layouts.cogs_sheets_for("KNC", channel="amazon"),
         sku_backend="knc",
         product_name_contains={"AE": "Kinetica"},
         sku_source_by_geo={"AE": "amazon_ae"},
-        no_fc_transfer_geos={"AE"},
     )
 
 
-# Register clients here — only place to touch for a new client in this script.
-CLIENT_CONFIGS: Dict[str, Callable[[], ClientManageFbaConfig]] = {
+CLIENT_CONFIGS: Dict[str, Callable[[], ClientAgeingConfig]] = {
     "ESH": _esh_config,
     "KNC": _knc_config,
 }
 
 
-def get_client_config(client: str) -> ClientManageFbaConfig:
+def get_client_config(client: str) -> ClientAgeingConfig:
     key = str(client).strip().upper()
     if key not in CLIENT_CONFIGS:
         known = ", ".join(sorted(CLIENT_CONFIGS))
@@ -185,28 +248,28 @@ def get_client_config(client: str) -> ClientManageFbaConfig:
 
 
 def output_dir_for(client_code: str) -> Path:
-    return paths.sanity_data_root() / client_code.upper() / "manage_fba"
+    return paths.sanity_data_root() / client_code.upper() / "ageing"
 
 
-def geo_code_label(geography: str, cfg: ClientManageFbaConfig) -> str:
+def geo_code_label(geography: str, cfg: ClientAgeingConfig) -> str:
     g = str(geography).strip()
-    upper = g.upper()
-    for code in cfg.cogs_sheets:
-        if code.upper() == upper:
-            return code
+    if g.upper() in {c.upper() for c in cfg.cogs_sheets}:
+        for code in cfg.cogs_sheets:
+            if code.upper() == g.upper():
+                return code
     if cfg.layout == "esh":
         mapped = cfg.geo_folders.get(g.lower())
         if mapped:
             return mapped
-    return upper
+    return g.upper()
 
 
 # =============================================================================
-# SKU / COGS helpers (backend chosen by cfg.sku_backend)
+# SKU / COGS
 # =============================================================================
 
 def load_client_sku_mapping(
-    cfg: ClientManageFbaConfig,
+    cfg: ClientAgeingConfig,
     geography_code: Optional[str] = None,
 ) -> dict:
     geos = [geography_code] if geography_code else list(cfg.cogs_sheets.keys())
@@ -217,7 +280,7 @@ def load_client_sku_mapping(
 
 def clean_client_skus(
     df: pd.DataFrame,
-    cfg: ClientManageFbaConfig,
+    cfg: ClientAgeingConfig,
     geography_code: str,
     sku_mapping: Optional[dict] = None,
 ) -> pd.DataFrame:
@@ -231,41 +294,15 @@ def clean_client_skus(
     )
 
 
-def keep_cols_for(geography_code: str, cfg: ClientManageFbaConfig) -> List[str]:
-    cols = list(KEEP_COLS)
-    if geography_code not in cfg.no_fc_transfer_geos:
-        if "afn-reserved-quantity" in cols:
-            idx = cols.index("afn-reserved-quantity") + 1
-            cols.insert(idx, FC_TRANSFER_COL)
-        else:
-            cols.append(FC_TRANSFER_COL)
-    return cols
-
-
-def pivot_values_for(geography_code: str, cfg: ClientManageFbaConfig) -> List[str]:
-    cols = list(PIVOT_VALUES)
-    if geography_code not in cfg.no_fc_transfer_geos:
-        if "afn_reserved_quantity" in cols:
-            idx = cols.index("afn_reserved_quantity") + 1
-            cols.insert(idx, FC_TRANSFER_SNAKE)
-        else:
-            cols.append(FC_TRANSFER_SNAKE)
-    return cols
-
-
 # =============================================================================
 # Discovery / IO
 # =============================================================================
 
 def resolve_geo_targets(
-    cfg: ClientManageFbaConfig,
+    cfg: ClientAgeingConfig,
     geos: Optional[Sequence[str]] = None,
 ) -> List[Tuple[str, Path]]:
-    """
-    Build (geo_code, inventory_root) list from client config.
-    - If geo_roots filled → use those (KNC-style)
-    - Else use geo_folders + relative_inventory_path (ESH-style)
-    """
+    """Prefer geo_roots when set; else geo_folders + relative_ageing_path."""
     wanted: Optional[Set[str]] = None
     if geos is not None:
         wanted = {str(g).strip().upper() for g in geos}
@@ -277,16 +314,16 @@ def resolve_geo_targets(
             if wanted is not None and code.upper() not in wanted:
                 continue
             if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Manage FBA path missing: {root}")
+                print(f"[WARN] [{cfg.client_code}] Ageing path missing: {root}")
                 continue
             targets.append((code, root))
     else:
         for folder, code in cfg.geo_folders.items():
             if wanted is not None and code.upper() not in wanted:
                 continue
-            root = cfg.base_path / folder / cfg.relative_inventory_path
+            root = cfg.base_path / folder / cfg.relative_ageing_path
             if not root.is_dir():
-                print(f"[WARN] [{cfg.client_code}] Manage FBA path missing: {root}")
+                print(f"[WARN] [{cfg.client_code}] Ageing path missing: {root}")
                 continue
             targets.append((code, root))
 
@@ -294,14 +331,14 @@ def resolve_geo_targets(
 
 
 def discover_year_folders(
-    inventory_root: Path,
+    ageing_root: Path,
     years: Optional[Sequence[str]] = None,
 ) -> List[Path]:
     allowed = set(VALID_YEARS)
     if years is not None:
         allowed &= {str(y) for y in years}
     found: List[Path] = []
-    for path in inventory_root.iterdir():
+    for path in ageing_root.iterdir():
         if path.is_dir() and path.name in allowed:
             found.append(path)
     return sorted(found, key=lambda p: p.name)
@@ -314,8 +351,7 @@ def is_ignored_file(file_path: Path) -> bool:
         return True
     if any(name.startswith(prefix) for prefix in IGNORE_FILE_PREFIXES):
         return True
-    # Skip undated landing files
-    if lower in {"manage_fba_inventory.csv", "manage_fba.csv"}:
+    if lower in {"fba_inventory.csv", "fba_inventory_aging.csv"}:
         return True
     return False
 
@@ -340,23 +376,16 @@ def _month_filter_tokens(months: Optional[Sequence[str]]) -> Optional[Set[str]]:
     return tokens
 
 
-def discover_manage_fba_files(
+def discover_ageing_files(
     year_path: Path,
     months: Optional[Sequence[str]] = None,
 ) -> List[Path]:
-    """
-    Recursively find manage-FBA files under a year folder.
-    Supports ESH Mon-YYYY folders and KNC apr/may (or flat) layouts.
-    """
     if not year_path.is_dir():
         return []
-
     wanted = _month_filter_tokens(months)
     files: List[Path] = []
     for path in year_path.rglob("*"):
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        if not path.is_file() or path.suffix.lower() != ".csv":
             continue
         if is_ignored_file(path):
             continue
@@ -375,28 +404,17 @@ def _hydrate_onedrive_file(file_path: Path) -> None:
         handle.read(1)
 
 
-def _read_csv_robust(file_path: Path) -> pd.DataFrame:
-    try:
-        return pd.read_csv(file_path, encoding="utf-8")
-    except UnicodeDecodeError:
-        return pd.read_csv(file_path, encoding="latin1")
-
-
-def read_inventory_file(file_path: Path, retries: int = 3) -> pd.DataFrame:
+def read_ageing_csv(file_path: Path, retries: int = 3) -> pd.DataFrame:
     last_error: Optional[Exception] = None
     for attempt in range(1, retries + 1):
         try:
             _hydrate_onedrive_file(file_path)
-            suffix = file_path.suffix.lower()
-            if suffix == ".csv":
-                return _read_csv_robust(file_path)
-            if suffix in {".xlsx", ".xls"}:
-                return pd.read_excel(file_path)
-            if suffix == ".ndjson":
-                return pd.read_json(file_path, lines=True, encoding="utf-8")
-            if suffix == ".json":
-                return pd.read_json(file_path, encoding="utf-8")
-            raise ValueError(f"Unsupported file extension: {suffix}")
+            for encoding in ("utf-8-sig", "utf-8", "latin1"):
+                try:
+                    return pd.read_csv(file_path, encoding=encoding)
+                except UnicodeDecodeError:
+                    continue
+            return pd.read_csv(file_path, encoding="latin1")
         except OSError as exc:
             last_error = exc
             if getattr(exc, "errno", None) != 22 and getattr(exc, "winerror", None) != 22:
@@ -419,146 +437,179 @@ def read_inventory_file(file_path: Path, retries: int = 3) -> pd.DataFrame:
 # Transform (ETL — do not change formulas when cleaning style)
 # =============================================================================
 
-def _normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    out.columns = [_clean_col(c) for c in out.columns]
+def normalize_headers(df: pd.DataFrame) -> pd.DataFrame:
+    """Unify Amazon ageing headers across full vs short (DE 2024/2025) exports."""
+    out = coalesce_snake_columns(df)
+
+    rename_map: Dict[str, str] = {}
+    for src, dest in AGEING_COLUMN_ALIASES.items():
+        if src in out.columns and dest not in out.columns:
+            rename_map[src] = dest
+        elif src in out.columns and dest in out.columns and src != dest:
+            out[dest] = out[dest].combine_first(out[src])
+            out = out.drop(columns=[src])
+    if rename_map:
+        out = out.rename(columns=rename_map)
+
+    if "fc_transfer" not in out.columns and "afn_fc_transfer_quantity" in out.columns:
+        out = out.rename(columns={"afn_fc_transfer_quantity": "fc_transfer"})
     return out
 
 
-def _extract_date(df: pd.DataFrame) -> pd.Series:
-    source_col = None
-    for candidate in ("source_file", "Source.Name", "source_name"):
-        matches = [c for c in df.columns if str(c).strip().lower() == candidate.lower()]
-        if matches:
-            source_col = matches[0]
-            break
-    if source_col is None:
-        for c in df.columns:
-            cleaned = to_snake(_clean_col(c))
-            if cleaned in {"source_file", "source_name"}:
-                source_col = c
+def ensure_snapshot_date(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "snapshot_date" not in out.columns:
+        for alt in ("inventory_age_snapshot_date", "snapshotdate"):
+            if alt in out.columns:
+                out["snapshot_date"] = out[alt]
                 break
-    if source_col is None:
-        raise KeyError("Expected source_file or Source.Name column for date extraction")
+    if "snapshot_date" not in out.columns:
+        raise KeyError("Expected snapshot_date column in ageing file")
+    out["date"] = (
+        pd.to_datetime(out["snapshot_date"], errors="coerce", format="mixed")
+        .dt.strftime("%Y-%m-%d")
+        .where(lambda s: s.notna(), None)
+    )
+    return out
 
-    date_raw = (
-        df[source_col]
-        .astype(str)
-        .str.extract(r"(\d{2}-[A-Za-z]{3}-\d{4})", expand=False)
+
+def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculated columns from knc_ageing.py / ESH ageing notebook:
+      sell_thru, dos (DOS_2), daily_velocity_*, velocity_trend(_status)
+    """
+    out = df.copy()
+    for col in ("units_shipped_t30", "units_shipped_t60", "units_shipped_t90", "available"):
+        if col not in out.columns:
+            out[col] = 0
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+
+    out["sell_thru"] = np.where(
+        out["units_shipped_t90"] == 0,
+        (out["units_shipped_t30"] / 30 + out["units_shipped_t60"] / 60) / 2,
+        (
+            out["units_shipped_t30"] / 30
+            + out["units_shipped_t60"] / 60
+            + out["units_shipped_t90"] / 90
+        )
+        / 3,
     )
-    return pd.to_datetime(date_raw, format="%d-%b-%Y", errors="coerce").dt.strftime(
-        "%Y-%m-%d"
+
+    out["dos"] = np.where(
+        out["sell_thru"] > 0,
+        np.minimum(out["available"] / out["sell_thru"], MAX_DOS_CAP),
+        np.where(out["available"] > 0, MAX_DOS_CAP, 0),
     )
+
+    out["daily_velocity_t30"] = out["units_shipped_t30"] / 30
+    out["daily_velocity_t60"] = out["units_shipped_t60"] / 60
+    out["daily_velocity_t90"] = np.where(
+        out["units_shipped_t90"] == 0,
+        out["daily_velocity_t60"],
+        out["units_shipped_t90"] / 90,
+    )
+    out["velocity_trend"] = np.where(
+        out["daily_velocity_t90"] != 0,
+        out["daily_velocity_t30"] / out["daily_velocity_t90"],
+        0,
+    )
+    out["velocity_trend_status"] = np.where(
+        out["velocity_trend"] > 1.2,
+        "Accelerating demand (risk of stockout)",
+        np.where(
+            (out["velocity_trend"] > 0.8) & (out["velocity_trend"] < 1.2),
+            "Stable demand",
+            "Declining demand (lower restock priority)",
+        ),
+    )
+    return out
 
 
 def transform_geography_frame(
     geo_df: pd.DataFrame,
-    cfg: ClientManageFbaConfig,
+    cfg: ClientAgeingConfig,
     geography_code: str,
     sku_mapping: Optional[dict] = None,
 ) -> pd.DataFrame:
     if geo_df.empty:
         return pd.DataFrame()
 
-    manage_fba = _normalize_headers(geo_df)
-    manage_fba["date"] = _extract_date(manage_fba)
+    ageing = normalize_headers(geo_df)
+    ageing = ensure_snapshot_date(ageing)
 
-    # Optional product-name filter (e.g. KNC AE → "Kinetica")
     needle = cfg.product_name_contains.get(geography_code)
     if needle:
         name_col = None
-        for cand in ("product-name", "product_name", "Product Name"):
-            matches = [c for c in manage_fba.columns if str(c).strip().lower() == cand.lower()]
-            if matches:
-                name_col = matches[0]
+        for cand in ("product_name", "productname", "title"):
+            if cand in ageing.columns:
+                name_col = cand
                 break
-        if name_col is None:
-            for c in manage_fba.columns:
-                if to_snake(_clean_col(c)) == "product_name":
-                    name_col = c
-                    break
         if name_col:
-            before = len(manage_fba)
-            manage_fba = manage_fba[
-                manage_fba[name_col].astype(str).str.contains(needle, case=False, na=False)
+            before = len(ageing)
+            ageing = ageing[
+                ageing[name_col].astype(str).str.contains(needle, case=False, na=False)
             ].copy()
             print(
                 f"  [{geography_code}] product_name filter '{needle}': "
-                f"{before:,} -> {len(manage_fba):,}"
+                f"{before:,} -> {len(ageing):,}"
             )
 
-    if "condition" in manage_fba.columns:
-        manage_fba = manage_fba.drop(
-            manage_fba[manage_fba["condition"] == "Unknown"].index
-        )
-    if "mfn-listing-exists" in manage_fba.columns:
-        manage_fba = manage_fba.drop(
-            manage_fba[manage_fba["mfn-listing-exists"] == "Yes"].index
-        )
-
-    keep_cols = keep_cols_for(geography_code, cfg)
-
-    if geography_code not in cfg.no_fc_transfer_geos:
-        if FC_TRANSFER_COL not in manage_fba.columns:
-            manage_fba[FC_TRANSFER_COL] = 0
-            print(f"  [{geography_code}] Note: {FC_TRANSFER_COL} missing — filled with 0")
-        else:
-            manage_fba[FC_TRANSFER_COL] = pd.to_numeric(
-                manage_fba[FC_TRANSFER_COL], errors="coerce"
-            ).fillna(0)
-    elif FC_TRANSFER_COL in manage_fba.columns:
-        manage_fba = manage_fba.drop(columns=[FC_TRANSFER_COL])
-
-    manage_fba["geography"] = geography_code
-
-    missing = [c for c in keep_cols if c not in manage_fba.columns]
-    if missing:
-        raise KeyError(f"Missing columns for {geography_code}: {missing}")
-
-    select_cols = ["geography"] + [c for c in keep_cols if c != "geography"]
-    manage_fba = manage_fba.loc[:, select_cols]
-    manage_fba.columns = [
-        "geography" if c == "geography" else to_snake(c) for c in manage_fba.columns
-    ]
-
-    manage_fba["sku"] = manage_fba["sku"].astype(str).str.replace(
-        r"-{1,2}$", "", regex=True
-    )
+    if "sku" not in ageing.columns:
+        raise KeyError(f"[{geography_code}] Expected sku column after header normalize")
 
     if sku_mapping is None:
         sku_mapping = load_client_sku_mapping(cfg, geography_code)
 
-    manage_fba = clean_client_skus(
-        manage_fba, cfg, geography_code, sku_mapping=sku_mapping
-    )
-    manage_fba = manage_fba.dropna(subset=["sku"])
-    manage_fba = manage_fba.drop_duplicates().reset_index(drop=True)
+    ageing = clean_client_skus(ageing, cfg, geography_code, sku_mapping=sku_mapping)
+    ageing = ageing.dropna(subset=["sku", "date"])
 
-    value_cols = [
-        c for c in pivot_values_for(geography_code, cfg) if c in manage_fba.columns
-    ]
-    manage_fba = (
+    for col in ["units_shipped_t30", "units_shipped_t60", "units_shipped_t90"]:
+        if col not in ageing.columns:
+            ageing[col] = 0
+        ageing[col] = pd.to_numeric(ageing[col], errors="coerce").fillna(0)
+
+    pivot_cols = list(dict.fromkeys(PIVOT_VALUES))
+    for col in pivot_cols:
+        if col not in ageing.columns:
+            ageing[col] = 0
+
+    agg: Dict[str, str] = {}
+    for col in pivot_cols:
+        if col == "recommended_action":
+            agg[col] = "first"
+        else:
+            ageing[col] = pd.to_numeric(ageing[col], errors="coerce").fillna(0)
+            agg[col] = "sum"
+
+    ageing = (
         pd.pivot_table(
-            manage_fba,
-            index=["geography", "date", "sku"],
-            values=value_cols,
-            aggfunc="sum",
+            ageing,
+            index=["date", "sku"],
+            values=list(agg.keys()),
+            aggfunc=agg,
         )
         .reset_index()
     )
 
-    manage_fba["client"] = cfg.client_code
-    manage_fba["client_id"] = cfg.client_id
-    manage_fba["platform"] = "amazon"
+    ageing = add_metrics(ageing)
+    ageing["geography"] = geography_code
+    ageing["client"] = cfg.client_code
+    ageing["client_id"] = cfg.client_id
+    ageing["platform"] = "amazon"
 
-    front = ["client", "client_id", "geography", "platform", "date", "sku"]
-    rest = [c for c in manage_fba.columns if c not in front]
-    return manage_fba.loc[:, front + rest]
+    for col in FINAL_COLUMNS:
+        if col not in ageing.columns:
+            ageing[col] = 0
+
+    ordered = ["client", "client_id", "geography", "platform"] + [
+        c for c in FINAL_COLUMNS if c in ageing.columns
+    ]
+    return ageing.loc[:, ordered].drop_duplicates().reset_index(drop=True)
 
 
-def transform_manage_fba(
+def transform_ageing(
     raw_df: pd.DataFrame,
-    cfg: ClientManageFbaConfig,
+    cfg: ClientAgeingConfig,
 ) -> pd.DataFrame:
     if raw_df.empty:
         return pd.DataFrame()
@@ -596,15 +647,13 @@ def save_geography_outputs(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\n>>> STEP: save per-geography manage FBA → {output_dir}")
+    print(f"\n>>> STEP: save per-geography ageing → {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
-        csv_path = output_dir / f"{geo_name}_{name_suffix}.csv"
         geo_df.to_parquet(parquet_path, index=False)
-        geo_df.to_csv(csv_path, index=False)
-        saved.extend([parquet_path, csv_path])
-        print(f"  [{geo_name}] {len(geo_df):,} rows -> {parquet_path.name}, {csv_path.name}")
+        saved.append(parquet_path)
+        print(f"  [{geo_name}] {len(geo_df):,} rows -> {parquet_path.name}")
     return saved
 
 
@@ -625,37 +674,29 @@ def process_year_folder(
 ) -> List[pd.DataFrame]:
     client = str(client_code).strip().upper() or "?"
     frames: List[pd.DataFrame] = []
-    for file_path in discover_manage_fba_files(year_path, months=months):
+    for file_path in discover_ageing_files(year_path, months=months):
         resolved = file_path.resolve()
         if resolved in processed_files:
             continue
-
-        parent = file_path.parent.name
-        month_label = parent if parent != year else "files"
-
-        print(f"[{client}] [{geography_code}] [{year}] [{month_label}] Reading {file_path.name}")
+        print(f"[{client}] [{geography_code}] [{year}] Reading {file_path.name}")
         try:
-            df = read_inventory_file(file_path)
+            df = read_ageing_csv(file_path)
+            df = normalize_headers(df)
             df = df.copy()
             df["geography"] = geography_code
             df["year"] = int(year) if str(year).isdigit() else year
-            df["month"] = month_label
             df["source_file"] = file_path.name
             df["source_path"] = str(resolved)
             frames.append(df)
             processed_files.add(resolved)
             stats.record_file_ok(geography_code, year, len(df))
         except Exception as exc:  # noqa: BLE001
-            print(
-                f"[{client}] [{geography_code}] [{year}] [{month_label}] "
-                f"ERROR reading {file_path.name}: {exc}"
-            )
+            print(f"[{client}] [{geography_code}] [{year}] ERROR reading {file_path.name}: {exc}")
             failed_files.append(
                 {
                     "path": str(resolved),
                     "geography": geography_code,
                     "year": year,
-                    "month": month_label,
                     "error": str(exc),
                 }
             )
@@ -666,7 +707,7 @@ def process_year_folder(
     return frames
 
 
-def build_manage_fba_dataframe(
+def build_ageing_dataframe(
     client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     years: Optional[Sequence[str]] = None,
@@ -687,6 +728,7 @@ def build_manage_fba_dataframe(
 
     print("=" * 60)
     print(f"Client : {cfg.client_code} ({cfg.client_name})")
+    print(f"Script : {Path(__file__).resolve()}")
     print(f"ID     : {cfg.client_id}")
     print(f"Base   : {cfg.base_path}")
     print(f"Years  : {list(years)}")
@@ -701,11 +743,11 @@ def build_manage_fba_dataframe(
     processed_files: Set[Path] = set()
     stats = LoadStats()
 
-    print("\n>>> STEP: load raw manage FBA files")
-    for geo_code, inventory_root in resolve_geo_targets(cfg, geos):
+    print("\n>>> STEP: load raw ageing files")
+    for geo_code, ageing_root in resolve_geo_targets(cfg, geos):
         stats.geographies.add(geo_code)
-        print(f"  geo root [{geo_code}]: {inventory_root}")
-        for year_path in discover_year_folders(inventory_root, years=years):
+        print(f"  geo root [{geo_code}]: {ageing_root}")
+        for year_path in discover_year_folders(ageing_root, years=years):
             year = year_path.name
             stats.year_folders.add(f"{geo_code}/{year}")
             all_frames.extend(
@@ -725,10 +767,10 @@ def build_manage_fba_dataframe(
         pd.concat(all_frames, ignore_index=True, sort=False) if all_frames else pd.DataFrame()
     )
     master_df = new_df
-    run_log = ReportRunLog(cfg.client_code, "manage_fba")
+    run_log = ReportRunLog(cfg.client_code, "ageing")
     try:
         summary = stats.print_summary(
-            title=f"{cfg.client_code} Manage FBA Inventory Load Summary"
+            title=f"{cfg.client_code} Ageing Inventory Load Summary"
         )
         run_log.append(summary)
 
@@ -742,8 +784,8 @@ def build_manage_fba_dataframe(
                 run_log.append(line)
 
         if apply_transform and not new_df.empty:
-            print("\n>>> STEP: transform (filters + SKU clean + pivot)")
-            new_df = transform_manage_fba(new_df, cfg=cfg)
+            print("\n>>> STEP: transform (SKU clean + pivot + calculated metrics)")
+            new_df = transform_ageing(new_df, cfg=cfg)
             print(f"Transformed new slice shape: {new_df.shape}")
 
         if merge_existing:
@@ -764,7 +806,7 @@ def build_manage_fba_dataframe(
             check_final_dataframe_new_skus(
                 master_df,
                 client=cfg.client_code,
-                label="manage_fba",
+                label="ageing",
                 run_log=run_log,
             )
 
@@ -783,7 +825,7 @@ def build_manage_fba_dataframe(
 # =============================================================================
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Client-wise manage FBA inventory combiner")
+    parser = argparse.ArgumentParser(description="Client-wise ageing inventory combiner")
     parser.add_argument("--client", default=CLIENT, choices=sorted(CLIENT_CONFIGS.keys()))
     parser.add_argument("--geos", default=None, help="Comma-separated geo codes")
     parser.add_argument("--years", default=None, help="Comma-separated years")
@@ -799,7 +841,7 @@ def main(argv: Optional[Sequence[str]] = None) -> Tuple[pd.DataFrame, List[dict]
     years = [y.strip() for y in args.years.split(",")] if args.years else None
     months = [m.strip() for m in args.months.split(",")] if args.months else None
 
-    master_df, failed_files, _stats = build_manage_fba_dataframe(
+    master_df, failed_files, _stats = build_ageing_dataframe(
         client=args.client,
         geos=geos,
         years=years,
@@ -837,5 +879,5 @@ def run(
 
 
 if __name__ == "__main__":
-    master_inventory_df, failed_files = main()
-    print_script_completed("manage_fba_report")
+    master_ageing_df, failed_files = main()
+    print_script_completed("ageing_report")

@@ -16,9 +16,18 @@ Removed as a top-level menu. API `GET /api/report-scripts` still powers Configur
 
 ## Stage key aliases
 `pipeline_engine.registry.normalize_stage_key` maps legacy report `stage` strings onto `report_stages` keys:
-- `Common Sanity Reports` / `amazon_reportss` → `common`
+- `amazon_reports` / `Amazon Reports` → `common` (package: `report_script/amazon_reports`)
+- `Common Sanity Reports` / `common_sanity_report` / `amazon_reportss` → `common` (legacy)
 - `Supply Chain` / `supply_chain` → `helper_files_nd_saving`
+- `shopify_reports` → package `report_script/shopify_reports` (stage key unchanged)
 Without this, Configuration → Stages showed **0 reports** for those packages even though scripts exist.
+
+## Keep API in sync
+When adding/renaming reports or stages, update `STAGE_PATHS`, env keys in `environment_service`, and YAML — see `.cursor/rules/sync-fastapi-on-report-changes.mdc`.
+
+## COGS for reports
+Report consumers use **local** `cogs/{client}/{geo}_{channel}_cogs.*` via `config_manager.cogs_local`, driven by `geography.yaml` (`cogs_channel` / `cogs_channels`).  
+`ESH_COGS_PATH` / `KNC_COGS_PATH` Excel workbooks are for **want_to_update upload only**, not for report ETL.
 
 ## Interactive scripts in portal runs
 Portal workers set `PIPELINE_NON_INTERACTIVE=1` and have no TTY. Scripts that call `input()` must:

@@ -1,7 +1,7 @@
 # Report registry — maps CLI choices to scripts / output folders.
 report_stages:
   common:
-    label: 'Stage: Common Sanity Reports'
+    label: 'Stage: Amazon Reports'
     order: 1
     enabled: true
     clients:
@@ -55,10 +55,16 @@ report_stages:
   utility_codes:
     label: 'Stage: utility_codes'
     order: 8
+  shopify_reports:
+    label: 'Stage: Shopify Reports'
+    order: 10
+    enabled: true
+    clients:
+    - KNC
 reports:
   ageing:
     label: Ageing
-    stage: Common Sanity Reports
+    stage: amazon_reports
     module: report_script.amazon_reports.ageing_report
     clients:
     - ESH
@@ -68,7 +74,7 @@ reports:
     enabled: true
   ledger:
     label: Ledger
-    stage: Common Sanity Reports
+    stage: amazon_reports
     module: report_script.amazon_reports.ledger_report
     clients:
     - ESH
@@ -78,7 +84,7 @@ reports:
     enabled: true
   manage_fba:
     label: Manage FBA
-    stage: amazon_reportss
+    stage: amazon_reports
     module: report_script.amazon_reports.manage_fba_report
     clients:
     - ESH
@@ -88,7 +94,7 @@ reports:
     enabled: true
   reserved:
     label: Reserved
-    stage: Common Sanity Reports
+    stage: amazon_reports
     module: report_script.amazon_reports.reserved_report
     clients:
     - ESH
@@ -98,7 +104,7 @@ reports:
     enabled: true
   order:
     label: Order
-    stage: Common Sanity Reports
+    stage: amazon_reports
     module: report_script.amazon_reports.orders_report
     clients:
     - ESH
@@ -108,13 +114,40 @@ reports:
     enabled: true
   inventory_database:
     label: Inventory Database
-    stage: Common Sanity Reports
+    stage: amazon_reports
     module: report_script.amazon_reports.inventory_database
     clients:
     - ESH
     - KNC
     output_subdir: inventory_database
     menu_order: 6
+    enabled: true
+  shopify_orders:
+    label: Shopify Orders
+    stage: shopify_reports
+    module: report_script.shopify_reports.orders_report
+    clients:
+    - KNC
+    output_subdir: orders
+    menu_order: 1
+    enabled: true
+  shopify_inventory:
+    label: Shopify Inventory
+    stage: shopify_reports
+    module: report_script.shopify_reports.inventory_shopify
+    clients:
+    - KNC
+    output_subdir: manage_fba
+    menu_order: 2
+    enabled: true
+  shopify_ledger:
+    label: Shopify Ledger
+    stage: shopify_reports
+    module: report_script.shopify_reports.ledger_shopify
+    clients:
+    - KNC
+    output_subdir: ledger
+    menu_order: 3
     enabled: true
   all_helper_files:
     label: All helper files

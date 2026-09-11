@@ -3,7 +3,7 @@
 Do not delete this folder.
 
 ## Purpose
-Multi-client Amazon inventory ETL: raw archive → common sanity reports → requirement-specific reports.
+Multi-client Amazon inventory ETL: raw archive → amazon reports → requirement-specific reports.
 
 **Project root:** `C:\Developer data\Centralized Ecosystem Portal` (see `project-location.md`, `portal.md`).
 
@@ -28,4 +28,4 @@ Portal decisions: **`docs/portal-architecture.md`**
 - `config_manager/report.yaml` — report → module mapping
 - `.env` — actual machine paths (from `.env.example`)
 
-See also: `overview.md`, `config.md`, `pipeline-stages.md`, `cogs.md`, `pincode.md`, `invalid-skus.md`, `vector-datahive.md`, `emami-report.md`, `atros-knc.md`, `utility-codes.md`, `inventory-database.md`, `common-run-logs.md`, `project-location.md`, `portal.md`
+See also: `overview.md`, `config.md`, `pipeline-stages.md`, `cogs.md`, `pincode.md`, `invalid-skus.md`, `vector-datahive.md`, `emami-report.md`, `atros-knc.md`, `utility-codes.md`, `inventory-database.md`, `common-run-logs.md`, `amazon-reports-folder.md`, `shopify-orders.md`, `shopify-inventory.md`, `project-location.md`, `portal.md`

@@ -169,16 +169,15 @@ def load_cogs_helper_frame(
     sheet_names: Optional[Sequence[str]] = None,
     *,
     geos: Optional[Sequence[str]] = None,
-    channel: str = "amazon",
+    channel: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Load ESH COGS from local project slices:
 
       cogs/esh/{geo}_{channel}_cogs.parquet|.csv
 
+    Channel defaults per geo from geography.yaml when ``channel`` is None.
     ``cogs_path`` is ignored (kept for call-site compatibility).
-    ``sheet_names`` still accepted and mapped via geography.yaml → geo codes.
-    Prefer passing ``geos`` explicitly.
     """
     from config_manager import cogs_local
 
@@ -198,7 +197,7 @@ def load_sku_mapping(
     sheet_names: Optional[Sequence[str]] = None,
     *,
     geos: Optional[Sequence[str]] = None,
-    channel: str = "amazon",
+    channel: Optional[str] = None,
     force_reload: bool = False,
 ) -> Dict[str, str]:
     """
@@ -212,9 +211,10 @@ def load_sku_mapping(
     resolved = tuple(
         cogs_local.resolve_geos("ESH", geos=geos, sheet_names=sheet_names)
     )
+    ch_key = channel if channel is not None else "per-geo"
     cache_key = (
         str(cogs_local.client_cogs_dir("ESH")),
-        channel,
+        ch_key,
         resolved,
     )
 
@@ -235,7 +235,7 @@ def load_sku_mapping(
     mapping = build_sku_mapping(convertor_helper)
     print(
         f"SKU mapping aliases loaded: {len(mapping):,} "
-        f"(from cogs/esh geos={list(resolved) or 'ALL'})"
+        f"(from cogs/esh geos={list(resolved) or 'ALL'} channel={ch_key})"
     )
     _SKU_MAPPING_CACHE[cache_key] = mapping
     return mapping

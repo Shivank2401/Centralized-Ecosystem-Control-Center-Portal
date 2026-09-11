@@ -7,7 +7,7 @@ Report scripts use these instead of hardcoded OneDrive absolute paths.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from config_manager.loader import get_client, load_geographies
 
@@ -61,12 +61,52 @@ ESH_REVENUE_GEO_FOLDERS: Dict[str, str] = {
 }
 
 
-def cogs_sheets_for(client: str) -> Dict[str, str]:
-    """Geography code → COGS sheet name from geography.yaml."""
-    return {
-        code: geo.cogs_sheet_name
+def cogs_sheets_for(client: str, *, channel: Optional[str] = None) -> Dict[str, str]:
+    """
+    Geography → excel_sheet for upload mapping / SKU-mapping geo lists.
+
+    When ``channel`` is set (e.g. ``amazon``), only geos that define that channel
+    are returned — so KNC IE (shopify-only) is excluded from Amazon reports.
+    """
+    out: Dict[str, str] = {}
+    for code, geo in load_geographies(client).items():
+        if channel:
+            if not geo.has_channel(channel):
+                continue
+            sheet = geo.channel(channel).excel_sheet
+        else:
+            sheet = geo.cogs_sheet_name
+        if sheet:
+            out[code] = sheet
+    return out
+
+
+def geos_with_channel(client: str, channel: str) -> List[str]:
+    """Enabled geo codes that define the given channel in geography.yaml."""
+    ch = str(channel).strip().lower()
+    return [
+        code
         for code, geo in load_geographies(client).items()
-    }
+        if geo.has_channel(ch)
+    ]
+
+
+def cogs_channel_for(client: str, geography: str) -> str:
+    """Default local COGS channel for a geo from geography.yaml."""
+    geos = load_geographies(client)
+    g = geos.get(str(geography).strip().upper())
+    if g is None:
+        return "amazon"
+    return str(g.default_channel or "amazon").strip().lower() or "amazon"
+
+
+def channel_config(client: str, geography: str, channel: str):
+    """Return ChannelConfig for client/geo/channel."""
+    geos = load_geographies(client)
+    g = geos.get(str(geography).strip().upper())
+    if g is None:
+        raise KeyError(f"Unknown geography {client}/{geography}")
+    return g.channel(channel)
 
 
 def client_identity(client: str) -> Dict[str, str]:

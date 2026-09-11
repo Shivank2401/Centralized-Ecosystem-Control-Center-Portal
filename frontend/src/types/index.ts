@@ -10,13 +10,26 @@ export type Client = {
   package?: string
 }
 
+export type GeographyChannel = {
+  excel_sheet?: string
+  orders_sales_channel?: string
+  markets?: string[]
+  vendors?: string[]
+  cogs_stem?: string
+}
+
 export type Geography = {
   client: string
   country_code: string
-  cogs_sheet_name: string
   country_currency: string
-  orders_sales_channel: string
   enabled: boolean
+  default_channel?: string
+  channels?: Record<string, GeographyChannel>
+  /** @deprecated prefer channels[default].excel_sheet — upload only */
+  cogs_sheet_name?: string
+  cogs_channel?: string
+  cogs_channels?: Record<string, string>
+  orders_sales_channel?: string
 }
 
 export type ReportStage = {
