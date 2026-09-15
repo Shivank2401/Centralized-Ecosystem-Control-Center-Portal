@@ -149,6 +149,15 @@ reports:
     output_subdir: ledger
     menu_order: 3
     enabled: true
+  shopify_sell_thru:
+    label: Shopify Sell-Thru
+    stage: shopify_reports
+    module: report_script.shopify_reports.sell_thru
+    clients:
+    - KNC
+    output_subdir: sell_thru
+    menu_order: 4
+    enabled: true
   all_helper_files:
     label: All helper files
     stage: Supply Chain

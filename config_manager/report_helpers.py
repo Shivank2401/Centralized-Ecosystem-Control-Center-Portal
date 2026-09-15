@@ -7,6 +7,7 @@ Used by manage_fba / reserved / ageing / ledger scripts — no client-specific p
 from __future__ import annotations
 
 import re
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -260,3 +261,80 @@ def print_script_completed(script_name: str, *, detail: str = "") -> None:
     name = str(script_name or "script").strip() or "script"
     suffix = f" ({detail})" if detail else ""
     print(f"\n[SUCCESS] {name}{suffix} completed successfully.\n")
+
+
+def _project_traceback_frames(exc: BaseException) -> List[traceback.FrameSummary]:
+    """Traceback frames under this repo (prefer report_script / config_manager)."""
+    if exc.__traceback__ is None:
+        return []
+    frames = traceback.extract_tb(exc.__traceback__)
+    project_markers = (
+        "report_script",
+        "config_manager",
+        "pipeline_engine",
+        "backend",
+        "Centralized Ecosystem Portal",
+    )
+    project = [
+        f
+        for f in frames
+        if any(m.replace("\\", "/") in str(f.filename).replace("\\", "/") for m in project_markers)
+    ]
+    return project or list(frames)
+
+
+def script_failure_location(exc: BaseException) -> str:
+    """Short 'file:line in func' pointer for logs / run error field."""
+    frames = _project_traceback_frames(exc)
+    if not frames:
+        return f"{type(exc).__name__}: {exc}"
+    frame = frames[-1]
+    name = Path(frame.filename).name
+    func = frame.name or "<module>"
+    return f"{name}:{frame.lineno} in {func}"
+
+
+def format_script_failure(
+    exc: BaseException,
+    *,
+    script_hint: str = "",
+) -> str:
+    """
+    Human-readable failure block pointing at the deepest project code line.
+
+    Used by the pipeline executor (all reports) and CLI ``__main__`` wrappers.
+    """
+    frames = _project_traceback_frames(exc)
+    hint = str(script_hint or "").strip() or "script"
+    lines = [
+        "",
+        f"[FAILED] {hint}",
+        f"  Error : {type(exc).__name__}: {exc}",
+    ]
+    if frames:
+        frame = frames[-1]
+        lines.extend(
+            [
+                f"  File  : {frame.filename}",
+                f"  Line  : {frame.lineno}",
+                f"  Func  : {frame.name or '<module>'}",
+            ]
+        )
+        if frame.line:
+            lines.append(f"  Code  : {frame.line.strip()}")
+        lines.append(f"  At    : {script_failure_location(exc)}")
+    lines.append("")
+    lines.append(traceback.format_exc().rstrip())
+    lines.append("")
+    return "\n".join(lines)
+
+
+def print_script_failure(
+    exc: BaseException,
+    *,
+    script_hint: str = "",
+) -> str:
+    """Print ``format_script_failure`` and return the same text (for run logs)."""
+    text = format_script_failure(exc, script_hint=script_hint)
+    print(text)
+    return text

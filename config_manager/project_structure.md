@@ -72,7 +72,8 @@ Centralized Ecosystem Portal/
 │   ├── shopify_reports/          # Stage: shopify_reports (KNC UK+IE); CLIENT_CONFIGS
 │   │   ├── orders_report.py      # Shopify orders → {GEO}_shopify_orders_database
 │   │   ├── inventory_shopify.py  # Shopify inventory → manage_fba/{GEO}_inventory_shopify
-│   │   └── ledger_shopify.py     # Shopify ledger → ledger/{GEO}_shopify_ledger_inventory
+│   │   ├── ledger_shopify.py     # Shopify ledger → ledger/{GEO}_shopify_ledger_inventory
+│   │   └── sell_thru.py          # Shopify sell-thru → sell_thru/{GEO}_shopify_sell_thru
 │   ├── helper_files_nd_saving/   # Stage: helper files (ex “Supply Chain”); >>> STEP + CLIENT_CONFIGS
 │   │   ├── all_helper_files.py / threeG_nd_updike.py  # ESH (CLIENT_CONFIGS); WH standard files
 │   │   ├── saving_raw_file_on_date.py  # ESH + KNC dated archives (notebook-style steps)
@@ -266,6 +267,7 @@ Default root: `Centralized Ecosystem Portal/sanity_data/`
 | `shopify_orders` | `{CLIENT}/orders/` | `{GEO}_shopify_orders_database.parquet` + `.csv` (not merged with Amazon) |
 | `shopify_inventory` | `{CLIENT}/manage_fba/` | `{GEO}_inventory_shopify.parquet` + `.csv` (alongside Amazon manage_fba; not merged) |
 | `shopify_ledger` | `{CLIENT}/ledger/` | `{GEO}_shopify_ledger_inventory.parquet` + `.csv` (alongside Amazon ledger; not merged) |
+| `shopify_sell_thru` | `{CLIENT}/sell_thru/` | `{GEO}_shopify_sell_thru.parquet` + `.csv` (standalone; not merged into orders) |
 | `inventory_database` | `{CLIENT}/inventory_database/` | `{GEO}_inventory_database.parquet` + `.csv` |
 | `vector_report` | `{CLIENT}/vector_report/` | `{geo}_{platform}_inventory_report.*` |
 | `emami_report` | `EMM/…` | Excel + CSV masters (see Emami brain note) |
@@ -284,6 +286,7 @@ sanity_data/{CLIENT}/logs/new_skus_vs_cogs/{report}/…      # missing SKU CSVs
 |---------------|--------------|
 | manage_fba / reserved / ageing / ledger | Load summary + geo×year + new SKUs vs COGS |
 | **orders** | Load summary + geo×year + **Orders period summary table** (GEO × 3 months Qty/Sales) + new SKUs |
+| shopify_orders / shopify_inventory / shopify_ledger / shopify_sell_thru | Load summary + **new SKUs vs Shopify COGS** (`channel=shopify` → `new_skus_vs_cogs/{report}/`) |
 | inventory_database | Combined rows + per-geo new SKUs |
 | vector | Geo checklists + stock status + new SKUs |
 
@@ -321,7 +324,7 @@ On success (no exception):
 | Folder | Use for |
 |--------|---------|
 | `amazon_reports/` | Standard Amazon combiners (incl. orders + inventory DB) |
-| `shopify_reports/` | KNC Shopify orders + inventory + ledger (UK + IE); `*_shopify_orders_database` + `manage_fba/*_inventory_shopify` + `ledger/*_shopify_ledger_inventory` |
+| `shopify_reports/` | KNC Shopify orders + inventory + ledger + sell_thru (UK + IE); `*_shopify_orders_database` + `manage_fba/*_inventory_shopify` + `ledger/*_shopify_ledger_inventory` + `sell_thru/*_shopify_sell_thru` |
 | `helper_files_nd_saving/` | Helper files, 3G/Updike, raw archive (ESH + KNC), COGS download |
 | `requirement_specific/` | Built on `sanity_data` (vector, Emami, SC inventory) |
 | `want_to_update/` | COGS upload, pincode, invalid SKUs |

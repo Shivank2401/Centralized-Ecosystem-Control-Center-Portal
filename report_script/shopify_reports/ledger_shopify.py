@@ -45,6 +45,10 @@ from config_manager.report_helpers import (
     LoadStats,
     merge_append_dedupe,
     print_script_completed,
+    print_script_failure,
+)
+from report_script.amazon_reports.new_sku_check import (
+    check_final_dataframe_new_skus,
 )
 from report_script.amazon_reports.run_logs import ReportRunLog
 
@@ -813,6 +817,16 @@ def build_ledger_dataframe(
         else:
             master_df = new_df
 
+        if not master_df.empty:
+            print("\n>>> STEP: new SKU check vs Shopify COGS")
+            check_final_dataframe_new_skus(
+                master_df,
+                client=cfg.client_code,
+                label="shopify_ledger",
+                channel="shopify",
+                run_log=run_log,
+            )
+
         if save_output and not master_df.empty:
             saved = save_geography_outputs(master_df, output_dir=out_dir)
             run_log.append(f"Saved {len(saved)} file(s) under {out_dir}")
@@ -874,23 +888,28 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    geos = [g.strip().upper() for g in args.geos.split(",") if g.strip()] if args.geos else None
-    years = [y.strip() for y in args.years.split(",") if y.strip()] if args.years else None
-    run(
-        client=args.client,
-        geos=geos,
-        years=years,
-        months=None,
-        save_output=not args.no_save,
-        merge_existing=not args.no_merge,
-        include_root_live=not args.no_root_live,
-    )
-    print_script_completed(
-        "ledger_shopify",
-        detail=(
-            f"client={args.client} geos={geos or 'ALL'} "
-            f"years={years or PROCESS_YEARS or sorted(VALID_YEARS)} "
-            f"months={PROCESS_MONTHS or 'ALL'}"
-        ),
-    )
+    try:
+        args = parse_args()
+        geos = [g.strip().upper() for g in args.geos.split(",") if g.strip()] if args.geos else None
+        years = [y.strip() for y in args.years.split(",") if y.strip()] if args.years else None
+        run(
+            client=args.client,
+            geos=geos,
+            years=years,
+            months=None,
+            save_output=not args.no_save,
+            merge_existing=not args.no_merge,
+            include_root_live=not args.no_root_live,
+        )
+        print_script_completed(
+            "ledger_shopify",
+            detail=(
+                f"client={args.client} geos={geos or 'ALL'} "
+                f"years={years or PROCESS_YEARS or sorted(VALID_YEARS)} "
+                f"months={PROCESS_MONTHS or 'ALL'}"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print_script_failure(exc, script_hint="ledger_shopify")
+        raise
+

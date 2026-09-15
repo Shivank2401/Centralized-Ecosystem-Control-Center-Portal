@@ -65,20 +65,31 @@ class PipelineExecutor:
         if not module_path:
             self._log("  [skip] no module wired yet")
             return ReportResult(status="skipped", message="no module wired")
+        short_name = module_path.rsplit(".", 1)[-1]
         try:
             mod = importlib.import_module(module_path)
         except ModuleNotFoundError as exc:
             self._log(f"  [skip] cannot import {module_path}: {exc}")
             return ReportResult(status="skipped", message=str(exc))
+        except Exception as exc:
+            from config_manager.report_helpers import print_script_failure
+
+            print_script_failure(exc, script_hint=short_name)
+            raise
         runner = getattr(mod, "run", None) or getattr(mod, "main", None)
         if runner is None:
             self._log(f"  [skip] {module_path} has no run()/main()")
             return ReportResult(status="skipped", message="no run()/main()")
         try:
-            raw = runner(**kwargs)
-        except TypeError:
-            raw = runner()
-        short_name = module_path.rsplit(".", 1)[-1]
+            try:
+                raw = runner(**kwargs)
+            except TypeError:
+                raw = runner()
+        except Exception as exc:
+            from config_manager.report_helpers import print_script_failure
+
+            print_script_failure(exc, script_hint=short_name)
+            raise
         parts: List[str] = []
         client = kwargs.get("client")
         if client:
@@ -122,6 +133,7 @@ class PipelineExecutor:
             "shopify_reports.orders_report",
             "shopify_reports.inventory_shopify",
             "shopify_reports.ledger_shopify",
+            "shopify_reports.sell_thru",
             "b_check_duplicate_image",
             "c_convert_json_to_csv",
             "a_import_any_file_to_mysql",
@@ -363,10 +375,14 @@ class PipelineExecutor:
             }
         except Exception as exc:
             if track_runs and active_run_id:
+                from config_manager.report_helpers import script_failure_location
+
+                loc = script_failure_location(exc)
+                err_msg = f"{exc} (at {loc})"
                 self.run_manager.mark_finished(
-                    active_run_id, status=PipelineRunStatus.FAILED, error=str(exc)
+                    active_run_id, status=PipelineRunStatus.FAILED, error=err_msg
                 )
-                self._log(f"\nPipeline failed: {exc}", active_run_id)
+                self._log(f"\nPipeline failed: {err_msg}", active_run_id)
                 self._log(traceback.format_exc(), active_run_id)
             raise
 

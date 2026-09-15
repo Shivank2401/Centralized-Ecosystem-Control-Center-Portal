@@ -48,11 +48,15 @@ from config_manager.report_helpers import (
     IGNORE_FILE_PREFIXES,
     LoadStats,
     print_script_completed,
+    print_script_failure,
 )
 from report_script.amazon_reports.orders_report import (
     merge_orders_with_existing,
     print_orders_three_month_checklist,
     resolve_orders_duplicates,
+)
+from report_script.amazon_reports.new_sku_check import (
+    check_final_dataframe_new_skus,
 )
 from report_script.amazon_reports.run_logs import ReportRunLog
 
@@ -589,33 +593,6 @@ def _filter_years_on_frame(
     return df.loc[mask].copy()
 
 
-def _report_new_skus_vs_shopify_cogs(
-    master_df: pd.DataFrame,
-    *,
-    client: str,
-    run_log: ReportRunLog,
-) -> None:
-    if master_df.empty or "sku" not in master_df.columns:
-        return
-    lines = ["New SKUs vs Shopify COGS (local CSV):"]
-    for geo, geo_df in master_df.groupby("geography", sort=True):
-        try:
-            cogs = load_shopify_cogs(str(geo))
-            known = set(cogs["sku"].astype(str).str.upper())
-        except Exception as exc:  # noqa: BLE001
-            lines.append(f"  [{geo}] COGS unavailable: {exc}")
-            continue
-        found = set(geo_df["sku"].astype(str).str.upper())
-        missing = sorted(found - known)
-        lines.append(f"  [{geo}] new_skus={len(missing):,}")
-        if missing:
-            preview = missing[:25]
-            lines.append(f"       sample: {preview}")
-    text = "\n".join(lines)
-    print(text)
-    run_log.append(text)
-
-
 # ---------------------------------------------------------------------------
 # Save / build / run
 # ---------------------------------------------------------------------------
@@ -797,8 +774,12 @@ def build_shopify_orders_dataframe(
 
         if not master_df.empty:
             print("\n>>> STEP: new SKU check vs Shopify COGS")
-            _report_new_skus_vs_shopify_cogs(
-                master_df, client=cfg.client_code, run_log=run_log
+            check_final_dataframe_new_skus(
+                master_df,
+                client=cfg.client_code,
+                label="shopify_orders",
+                channel="shopify",
+                run_log=run_log,
             )
 
         if apply_transform and not master_df.empty:
@@ -829,22 +810,26 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = parse_args(argv)
-    geos = [g.strip().upper() for g in args.geos.split(",")] if args.geos else None
-    years = [y.strip() for y in args.years.split(",")] if args.years else None
-    months = [m.strip() for m in args.months.split(",")] if args.months else None
-    build_shopify_orders_dataframe(
-        client=args.client,
-        geos=geos,
-        years=years,
-        months=months,
-        save_output=not args.no_save,
-        merge_existing=not args.no_merge,
-    )
-    print_script_completed(
-        "shopify_orders_report",
-        detail=f"geos={','.join(geos)}" if geos else "",
-    )
+    try:
+        args = parse_args(argv)
+        geos = [g.strip().upper() for g in args.geos.split(",")] if args.geos else None
+        years = [y.strip() for y in args.years.split(",")] if args.years else None
+        months = [m.strip() for m in args.months.split(",")] if args.months else None
+        build_shopify_orders_dataframe(
+            client=args.client,
+            geos=geos,
+            years=years,
+            months=months,
+            save_output=not args.no_save,
+            merge_existing=not args.no_merge,
+        )
+        print_script_completed(
+            "shopify_orders_report",
+            detail=f"geos={','.join(geos)}" if geos else "",
+        )
+    except Exception as exc:  # noqa: BLE001
+        print_script_failure(exc, script_hint="shopify_orders")
+        raise
 
 
 def run(

@@ -22,7 +22,8 @@ sanity_data/{CLIENT}/logs/new_skus_vs_cogs/{report}/{YYYYMMDD_HHMMSS}.csv
 
 Columns: `client`, `report`, `geography`, `sku`, `run_at`
 
-Example: `sanity_data/ESH/logs/new_skus_vs_cogs/ageing/latest.csv` after ageing report.
+Example: `sanity_data/ESH/logs/new_skus_vs_cogs/ageing/latest.csv` after ageing report.  
+Shopify reports use the same path with `channel=shopify` (e.g. `…/new_skus_vs_cogs/shopify_orders/`).
 
 `latest.log` always mirrors the most recent run for that client + report.
 
@@ -30,8 +31,9 @@ Example: `sanity_data/ESH/logs/new_skus_vs_cogs/ageing/latest.csv` after ageing 
 
 | Report | Load summary + geo×year | New SKUs vs COGS | Orders period | Stock status |
 |--------|-------------------------|------------------|---------------|--------------|
-| manage_fba / reserved / ageing / ledger | yes | yes | — | — |
+| manage_fba / reserved / ageing / ledger | yes | yes (default/amazon channel) | — | — |
 | orders | yes | yes | current + previous month rows/qty/sales per geo | — |
+| shopify_orders / inventory / ledger / sell_thru | yes | yes (`channel=shopify`) | orders only: 3-month checklist | — |
 | inventory_database | combined row counts | yes (per geo) | — | n/a (see vector) |
 | vector | geo checklists | yes | previous-month orders in checklist | Overstock / Understock / Healthy |
 
@@ -47,3 +49,10 @@ Example: `sanity_data/ESH/logs/new_skus_vs_cogs/ageing/latest.csv` after ageing 
 - `orders_report.py`
 - `inventory_database.py`
 - `requirement_specific/vector_report.py` (stock status lives here)
+
+## Failure location (file / line)
+
+`config_manager.report_helpers.print_script_failure` / `script_failure_location` — used by
+`pipeline_engine.executor.import_and_run` for **all** portal reports, plus Shopify CLI
+`__main__` wrappers. On failure the log shows File / Line / Func / Code for the deepest
+project frame, and the run error includes `at file:line in func`.

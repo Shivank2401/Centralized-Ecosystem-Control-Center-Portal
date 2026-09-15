@@ -63,13 +63,18 @@ def _sku_set(series: pd.Series) -> Set[str]:
     return out
 
 
-def _load_client_sku_mapping(client: str, geography_code: str) -> Dict[str, str]:
+def _load_client_sku_mapping(
+    client: str,
+    geography_code: str,
+    *,
+    channel: Optional[str] = None,
+) -> Dict[str, str]:
     """Alias -> master SKU mapping for one client/geo."""
     geos = [str(geography_code).strip().upper()] if geography_code else None
     backend = _sku_backend_for(client)
     if backend == "knc":
-        return knc_sku_cleaning.load_sku_mapping(geos=geos)
-    return esh_sku_cleaning.load_sku_mapping(geos=geos)
+        return knc_sku_cleaning.load_sku_mapping(geos=geos, channel=channel)
+    return esh_sku_cleaning.load_sku_mapping(geos=geos, channel=channel)
 
 
 def _mapped_frame_skus(
@@ -78,6 +83,7 @@ def _mapped_frame_skus(
     client: str,
     geography_code: str,
     apply_mapping: bool,
+    channel: Optional[str] = None,
 ) -> Set[str]:
     """
     Normalize frame SKUs; optionally map aliases (ON_1/ON_2/ON_3...) to master SKU.
@@ -86,7 +92,7 @@ def _mapped_frame_skus(
     if not apply_mapping or not frame_skus:
         return frame_skus
 
-    mapping = _load_client_sku_mapping(client, geography_code)
+    mapping = _load_client_sku_mapping(client, geography_code, channel=channel)
     if not mapping:
         return frame_skus
 
@@ -136,6 +142,7 @@ def report_new_skus_vs_cogs(
     label: str = "",
     quiet: bool = False,
     apply_mapping: bool = True,
+    channel: Optional[str] = None,
     **_ignored,
 ) -> List[str]:
     """
@@ -150,25 +157,27 @@ def report_new_skus_vs_cogs(
             print(f"  {tag} No rows — skip new-SKU vs COGS check")
         return []
 
-    cogs_skus = cogs_sheet_skus(client, geography_code)
+    cogs_skus = cogs_sheet_skus(client, geography_code, channel=channel)
     frame_skus = _mapped_frame_skus(
         df[sku_column],
         client=client,
         geography_code=geography_code,
         apply_mapping=apply_mapping,
+        channel=channel,
     )
     missing = sorted(frame_skus - cogs_skus)
     if quiet:
         return missing
+    ch = f" channel={channel}" if channel else ""
     if missing:
-        print(f"  {tag} NEW SKUs not in COGS sheet ({len(missing)}):")
+        print(f"  {tag} NEW SKUs not in COGS sheet ({len(missing)}){ch}:")
         preview = missing[:50]
         for sku in preview:
             print(f"    - {sku}")
         if len(missing) > 50:
             print(f"    ... +{len(missing) - 50} more")
     else:
-        print(f"  {tag} No new SKUs — all present in COGS sheet")
+        print(f"  {tag} No new SKUs — all present in COGS sheet{ch}")
     return missing
 
 
@@ -180,12 +189,14 @@ def check_final_dataframe_new_skus(
     sku_column: str = "sku",
     geography_column: str = "geography",
     run_log=None,
+    channel: Optional[str] = None,
 ) -> Dict[str, List[str]]:
     """
     Client + geo-wise check on the final dataframe, immediately before export.
 
-    Groups ``df`` by geography and compares each slice to
-    ``cogs/{client}/{geo}_amazon_cogs`` SKUs.
+    Groups ``df`` by geography and compares each slice to local COGS SKUs
+    (``cogs/{client}/{geo}_{channel}_cogs`` when ``channel`` is set; else
+    default channel / amazon stem).
 
     When ``run_log`` is a ReportRunLog, the same text is appended for file review.
     """
@@ -208,7 +219,11 @@ def check_final_dataframe_new_skus(
             run_log.append(msg)
         return {}
 
-    print(f"[{str(client).upper()}] New SKUs vs COGS sheet (final dataframe, before export)")
+    ch_note = f" channel={channel}" if channel else ""
+    print(
+        f"[{str(client).upper()}] New SKUs vs COGS sheet "
+        f"(final dataframe, before export){ch_note}"
+    )
     alerts: Dict[str, List[str]] = {}
     if geography_column in df.columns:
         for geography, geo_df in df.groupby(geography_column, sort=True):
@@ -219,6 +234,7 @@ def check_final_dataframe_new_skus(
                 geography_code=code,
                 sku_column=sku_column,
                 label=label,
+                channel=channel,
             )
     else:
         alerts["ALL"] = report_new_skus_vs_cogs(
@@ -227,6 +243,7 @@ def check_final_dataframe_new_skus(
             geography_code="ALL",
             sku_column=sku_column,
             label=label,
+            channel=channel,
         )
     print_new_sku_rollup(client, alerts, label=label)
 

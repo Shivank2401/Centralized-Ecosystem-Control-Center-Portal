@@ -32,4 +32,9 @@ def get_report(report_code: str):
 @router.post("/config/refresh")
 def refresh_configuration():
     _service.refresh()
+    # Keep run validation in sync (separate ConfigRegistry on RunService).
+    from backend.services.run_service import run_service as _run_service
+
+    if hasattr(_run_service, "refresh"):
+        _run_service.refresh()
     return ok({"refreshed": True}, message="Configuration reloaded from YAML")

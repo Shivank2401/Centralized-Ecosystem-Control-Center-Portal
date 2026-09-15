@@ -35,6 +35,11 @@ class RunService:
         self.validator = validator or PipelineValidator()
         self._children: Dict[str, subprocess.Popen] = {}
 
+    def refresh(self) -> None:
+        """Reload report.yaml into the validator registry (keep in sync with portal edits)."""
+        if hasattr(self.validator, "registry") and hasattr(self.validator.registry, "refresh"):
+            self.validator.registry.refresh()
+
     def create_and_start(
         self,
         *,
@@ -43,6 +48,10 @@ class RunService:
         reports: Sequence[str],
         source: str = "api",
     ) -> RunRecord:
+        # Always re-read YAML so newly registered reports (e.g. shopify_sell_thru)
+        # are visible without restarting portal.py.
+        self.refresh()
+
         clients_u = [c.strip().upper() for c in clients]
         geos_u = [g.strip().upper() for g in geos]
         reports_l = [r.strip().lower() for r in reports]
