@@ -917,8 +917,6 @@ def transform_orders(
         print(f"\n>>> STEP: transform [{cfg.client_code}] {code} ({len(geo_df):,} raw rows)")
         try:
             sku_mapping = load_client_sku_mapping(cfg, code)
-            print("FBA19D7Y7F67:", sku_mapping.get("FBA19D7Y7F67"))
-            print("FBA18VLXSWJF:", sku_mapping.get("FBA18VLXSWJF"))
 
             cleaned, ashu_df = transform_geography_orders(
                 geo_df, cfg=cfg, geography_code=code, sku_mapping=sku_mapping

@@ -14,6 +14,7 @@ sequences:
     - UK
     - IN
     - AE
+    - IE
     reports:
     - all_helper_files
     - saving_raw_file_on_date
@@ -23,6 +24,10 @@ sequences:
     - reserved
     - order
     - inventory_database
+    - shopify_orders
+    - shopify_inventory
+    - shopify_ledger
+    - shopify_sell_thru
   vector_datahive_updater:
     label: Vector Datahive Updater
     clients:
@@ -35,8 +40,10 @@ sequences:
     - UK
     - IN
     - AE
+    - IE
     reports:
-    - vector_report
+    - vector_report_amazon
+    - vector_report_shopify
   supply_chain_invetory_updater:
     label: Supply Chain Invetory Updater
     clients:
@@ -51,3 +58,26 @@ sequences:
     reports:
     - threeG_nd_updike
     - d_inventory_supply_chain
+  shubham_upadater:
+    label: Shubham Upadater
+    clients:
+    - KNC
+    geos:
+    - US
+    - CA
+    - DE
+    - UK
+    - IE
+    - IN
+    - AE
+    reports:
+    - ageing
+    - ledger
+    - manage_fba
+    - reserved
+    - order
+    - inventory_database
+    - shopify_orders
+    - shopify_inventory
+    - shopify_ledger
+    - shopify_sell_thru

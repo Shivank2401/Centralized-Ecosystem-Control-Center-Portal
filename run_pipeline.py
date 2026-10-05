@@ -8,7 +8,7 @@ Usage:
 
 Interactive entry (mode first):
   1) Run a saved sequence
-  2) Create / manage sequences
+  2) Create / manage sequences  (create, modify, delete)
   3) Classic run (clients → geos → reports)
 """
 
@@ -465,12 +465,20 @@ def _parse_stage_report_shortcut(
     return picked or None
 
 
-def prompt_report_sequence(selected_clients: Sequence[str]) -> List[str]:
+def prompt_report_sequence(
+    selected_clients: Sequence[str],
+    *,
+    initial: Optional[Sequence[str]] = None,
+    cancel_returns_none: bool = False,
+) -> Optional[List[str]]:
     """
     Build an ordered multi-stage report queue.
 
     User repeatedly picks a stage, then report letters, appending to the sequence.
     Supports shortcuts like: 2-a,b,c   then later   5-a
+
+    If ``initial`` is set, the builder starts with those reports (modify flow).
+    If ``cancel_returns_none`` is True, X/Cancel returns None instead of exiting.
     """
     stage_opts = _stage_menu_options(selected_clients)
     if not stage_opts:
@@ -479,7 +487,7 @@ def prompt_report_sequence(selected_clients: Sequence[str]) -> List[str]:
             f"{list(selected_clients)} in report.yaml."
         )
 
-    sequence: List[str] = []
+    sequence: List[str] = [str(c).strip().lower() for c in (initial or []) if str(c).strip()]
 
     print(
         """
@@ -493,6 +501,8 @@ Examples:
   - then add stage 5 report a via 5-a
 """.rstrip()
     )
+    if sequence:
+        print("(Starting from the existing sequence — add more, clear, or finish with D.)")
 
     while True:
         print()
@@ -522,6 +532,9 @@ Examples:
             print("Sequence cleared.")
             continue
         if upper in {"X", "CANCEL", "Q"}:
+            if cancel_returns_none:
+                print("Builder cancelled — no report changes applied.")
+                return None
             raise SystemExit("Sequence builder cancelled.")
 
         shortcut_codes = _parse_stage_report_shortcut(raw, stage_opts, selected_clients)
@@ -597,7 +610,6 @@ Examples:
         for code in picked_codes:
             sequence.append(code)
         print("Added: " + ", ".join(_report_label(c) for c in picked_codes))
-
 
 # ---------------------------------------------------------------------------
 # Saved sequences (config_manager/run_sequences.yaml)
@@ -711,9 +723,105 @@ def prompt_pick_saved_sequence() -> Optional[Tuple[str, dict]]:
     return None
 
 
+def prompt_modify_sequence() -> Optional[Tuple[List[str], List[str], List[str]]]:
+    """
+    Edit an existing saved sequence (add scripts, clients, geos, rename).
+
+    Returns selection to run immediately after save, or None to stay in manage menu.
+    """
+    picked = prompt_pick_saved_sequence()
+    if not picked:
+        return None
+
+    seq_id, meta = picked
+    clients = [str(c).upper() for c in (meta.get("clients") or [])]
+    geos = [str(g).upper() for g in (meta.get("geos") or [])]
+    reports = [str(r).strip().lower() for r in (meta.get("reports") or [])]
+    label = str(meta.get("label") or seq_id)
+    dirty = False
+
+    while True:
+        print(f"\n--- Modify sequence: {label} [{seq_id}] ---")
+        print(f"Clients: {', '.join(clients) if clients else '(none)'}")
+        print(f"Geos:    {', '.join(geos) if geos else '(none)'}")
+        _print_sequence(reports)
+        print(
+            """
+1. Add / edit reports
+2. Change clients
+3. Change geographies
+4. Rename label
+5. Save changes
+6. Cancel (discard unsaved changes)
+""".rstrip()
+        )
+        raw = input("\nSelect [1-6]: ").strip() or "6"
+
+        if raw in {"6", "c", "C", "cancel", "x", "X"}:
+            if dirty:
+                print("Changes discarded.")
+            return None
+
+        if raw == "1":
+            if not clients:
+                print("Set clients first (option 2).")
+                continue
+            updated = prompt_report_sequence(
+                clients,
+                initial=reports,
+                cancel_returns_none=True,
+            )
+            if updated is not None:
+                reports = updated
+                dirty = True
+            continue
+
+        if raw == "2":
+            clients = prompt_clients()
+            dirty = True
+            continue
+
+        if raw == "3":
+            geos = prompt_geographies()
+            dirty = True
+            continue
+
+        if raw == "4":
+            new_label = input(f"New label [{label}]: ").strip()
+            if new_label:
+                label = new_label
+                dirty = True
+            else:
+                print("Label unchanged.")
+            continue
+
+        if raw == "5":
+            if not clients or not geos or not reports:
+                print("Sequence incomplete — need clients, geos, and at least one report.")
+                continue
+            sequences = load_saved_sequences()
+            sequences[seq_id] = {
+                "label": label,
+                "clients": list(clients),
+                "geos": list(geos),
+                "reports": list(reports),
+            }
+            save_saved_sequences(sequences)
+            print(f"Updated sequence '{seq_id}' saved.")
+            dirty = False
+
+            run_now = input("\nRun this sequence now? [y/N]: ").strip().lower()
+            if run_now in {"y", "yes"}:
+                clients, geos = _normalize_saved_selection(clients, geos)
+                return list(clients), list(geos), list(reports)
+            return None
+
+        print(f"Invalid choice: {raw}")
+
+
 def prompt_manage_sequences() -> Optional[Tuple[List[str], List[str], List[str]]]:
     """
-    Create / delete saved sequences.
+    Create / modify / delete saved sequences.
 
     Returns a selection to run immediately, or None to return to top menu.
     """
@@ -723,8 +831,9 @@ def prompt_manage_sequences() -> Optional[Tuple[List[str], List[str], List[str]]
             """
 Manage sequences:
 1. Create new sequence
-2. Delete a saved sequence
-3. Back to main menu
+2. Modify a saved sequence
+3. Delete a saved sequence
+4. Back to main menu
 """.rstrip()
         )
         if sequences:
@@ -734,11 +843,11 @@ Manage sequences:
         else:
             print("(none saved yet)")
 
-        raw = input("\nSelect [1-3]: ").strip() or "3"
-        if raw in {"3", "b", "B", "back"}:
+        raw = input("\nSelect [1-4]: ").strip() or "4"
+        if raw in {"4", "b", "B", "back"}:
             return None
 
-        if raw == "2":
+        if raw == "3":
             picked = prompt_pick_saved_sequence()
             if not picked:
                 continue
@@ -753,6 +862,15 @@ Manage sequences:
                 print(f"Deleted '{seq_id}'.")
             continue
 
+        if raw == "2":
+            if not sequences:
+                print("No saved sequences yet. Create one first (option 1).")
+                continue
+            selection = prompt_modify_sequence()
+            if selection is not None:
+                return selection
+            continue
+
         if raw != "1":
             print(f"Invalid choice: {raw}")
             continue
@@ -761,7 +879,10 @@ Manage sequences:
         print("\n--- Create sequence ---")
         clients = prompt_clients()
         geos = prompt_geographies()
-        reports = prompt_report_sequence(clients)
+        reports = prompt_report_sequence(clients, cancel_returns_none=True)
+        if not reports:
+            print("Create cancelled.")
+            continue
         _print_sequence(reports)
         prompt_save_sequence(clients, geos, reports)
 

@@ -4,17 +4,25 @@ KNC Shopify Orders combiner (UK + IE).
 Covers:
   - Client: KNC only (geos UK, IE)
   - Inputs: Shopify sales CSVs from KNC_SHOPIFY_{GEO}_SALES_ROOT (.env)
-  - Pipeline: Market + vendor filter → qty/sales clean → datetime →
-              knc_sku_cleaning(source=shopify) → pivot → pincode city/state →
-              Shopify COGS attributes → AOV
+  - Pipeline (per geo after append):
+      1) select required columns
+      2) drop blank purchase_hour
+      3) qty/sales clean (keep signed refunds)
+      4) datetime parse → year_month / purchase_date / time
+      5) SKU clean+map; missing SKU → "Not defined" (not dropped)
+      6) pivot → pincode → COGS merge; missing product_name → "Not defined"
+      7) print new SKUs in orders but not in Shopify COGS
+  - Market / vendor lists stay in geography.yaml (bookmark / sell_thru) —
+    NOT applied as filters here
   - Outputs: sanity_data/KNC/orders/{GEO}_shopify_orders_database.parquet|.csv
     (separate from Amazon {GEO}_orders_database — never merged)
   - Same 3-month qty/sales checklist as Amazon orders
+  - Refunds: Shopify often has total_sales < 0 with quantity == 0 — keep those rows
 
 Adding another Shopify geo later:
   1. Add geo in geography.yaml / client.yaml
   2. Set KNC_SHOPIFY_{GEO}_SALES_ROOT in .env
-  3. Add markets / vendors / currency in CLIENT_CONFIGS below
+  3. Currency comes from geography.yaml; markets/vendors optional (not used here)
   4. Place cogs/knc/{geo}_shopify_cogs.csv
 
 Style: step-by-step prints (>>> STEP). ETL aligned to orders_report.ipynb.
@@ -67,7 +75,7 @@ from report_script.amazon_reports.run_logs import ReportRunLog
 CLIENT = "KNC"
 PROCESS_GEOS: Optional[List[str]] = None
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
-PROCESS_YEARS: Optional[List[str]] = ["2026"]
+PROCESS_YEARS: Optional[List[str]] = ["2024", "2025", "2026"]
 PROCESS_MONTHS: Optional[List[str]] = None
 
 SAVE_OUTPUT = True
@@ -75,8 +83,10 @@ MERGE_WITH_EXISTING = True
 APPLY_TRANSFORM = True
 
 PARQUET_NAME_SUFFIX = "shopify_orders_database"
+MISSING_SKU_LABEL = "Not defined"
+MISSING_PRODUCT_NAME_LABEL = "Not defined"
 
-# Same schema as Amazon orders (platform = shopify)
+# Same schema as Amazon orders (platform = shopify) + product_name from COGS
 OUTPUT_COLUMNS = [
     "client",
     "geography",
@@ -96,6 +106,28 @@ OUTPUT_COLUMNS = [
     "country",
     "platform",
     "currency",
+    "product_name",
+]
+
+# Columns kept after append (step 2 — select required columns)
+PROCESS_COLUMNS = [
+    "order_id",
+    "sku",
+    "quantity",
+    "total_sales",
+    "purchase_hour",
+    "order_status",
+    "year_month",
+    "pincode",
+    "city",
+    "state",
+    "market",
+    "sales-channel",
+    "currency",
+    "aov",
+    "geography",
+    "source_file",
+    "source_path",
 ]
 
 COLUMNS_TO_READ = [
@@ -143,6 +175,12 @@ RENAME_MAPPING = {
 
 @dataclass
 class ShopifyGeoConfig:
+    """Per-geo Shopify orders config.
+
+    ``markets`` / ``vendors`` are loaded from geography.yaml as a bookmark only
+    (also used by sell_thru). Orders ETL does **not** filter on them.
+    """
+
     markets: List[str]
     vendors: List[str]
     currency: str
@@ -159,7 +197,7 @@ class ClientShopifyOrdersConfig:
 
 
 def _knc_shopify_config() -> ClientShopifyOrdersConfig:
-    """Build Shopify geo filters from geography.yaml → channels.shopify."""
+    """Build Shopify geo config from geography.yaml → channels.shopify."""
     from config_manager.loader import load_geographies
 
     ident = layouts.client_identity("KNC")
@@ -177,7 +215,7 @@ def _knc_shopify_config() -> ClientShopifyOrdersConfig:
     if not geos_cfg:
         raise ValueError(
             "No KNC geos with channels.shopify in geography.yaml "
-            "(expected UK and/or IE with markets/vendors)."
+            "(expected UK and/or IE)."
         )
     return ClientShopifyOrdersConfig(
         client_code=ident["client_code"],
@@ -401,20 +439,66 @@ def load_shopify_cogs(geography_code: str) -> pd.DataFrame:
             "sku": df["sku"].astype(str).str.strip().str.upper()
             if "sku" in df.columns
             else pd.Series(dtype=str),
-            "ASIN": df["asin"].astype(str) if "asin" in df.columns else "Unknown",
-            "Product Category": (
+            "asin": df["asin"].astype(str) if "asin" in df.columns else pd.Series(dtype=str),
+            "product_category": (
                 df["product_category"].astype(str)
                 if "product_category" in df.columns
-                else "Unknown"
+                else pd.Series(dtype=str)
             ),
-            "Product Name": (
+            "product_name": (
                 df["product_name"].astype(str)
                 if "product_name" in df.columns
-                else "Unknown"
+                else pd.Series(dtype=str)
             ),
         }
     )
     return out.drop_duplicates(subset=["sku"], keep="first")
+
+
+def _is_blank_series(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    return (
+        series.isna()
+        | s.eq("")
+        | s.str.lower().isin({"nan", "none", "nat", "null"})
+    )
+
+
+def _print_new_skus_vs_cogs(
+    orders_df: pd.DataFrame,
+    cogs_df: pd.DataFrame,
+    *,
+    client: str,
+    geography_code: str,
+) -> List[str]:
+    """Print SKUs present in orders but missing from Shopify COGS (excl. Not defined)."""
+    tag = f"[{client}] [{geography_code}]"
+    if orders_df.empty or "sku" not in orders_df.columns:
+        print(f"  {tag} new SKU check: no order rows")
+        return []
+
+    order_skus = {
+        str(s).strip().upper()
+        for s in orders_df["sku"].dropna().unique()
+        if str(s).strip() and str(s).strip().lower() != MISSING_SKU_LABEL.lower()
+    }
+    cogs_skus = set()
+    if not cogs_df.empty and "sku" in cogs_df.columns:
+        cogs_skus = {
+            str(s).strip().upper()
+            for s in cogs_df["sku"].dropna().unique()
+            if str(s).strip()
+        }
+    missing = sorted(order_skus - cogs_skus)
+    if missing:
+        print(f"  {tag} NEW SKUs in orders but not in COGS ({len(missing)}):")
+        for sku in missing[:50]:
+            print(f"    - {sku}")
+        if len(missing) > 50:
+            print(f"    ... +{len(missing) - 50} more")
+    else:
+        print(f"  {tag} No new SKUs - all order SKUs present in COGS")
+    return missing
 
 
 # ---------------------------------------------------------------------------
@@ -436,67 +520,91 @@ def transform_geography_shopify_orders(
     geography_code: str,
     geo_cfg: ShopifyGeoConfig,
 ) -> pd.DataFrame:
+    """
+    Per-geo transform after all year files are appended:
+
+      1. select required columns
+      2. drop blank purchase_hour
+      3. qty / signed total_sales clean
+      4. datetime fields
+      5. SKU clean+map; missing → Not defined
+      6. pivot + pincode + COGS; missing product_name → Not defined
+      7. print new SKUs vs COGS
+    """
     if raw_df.empty:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-    df = raw_df.copy()
     code = geography_code.upper()
+    df = raw_df.copy()
 
-    # Drop null SKUs
-    before = len(df)
-    df = df[df["sku"].notna() & (df["sku"].astype(str).str.strip() != "")].copy()
-    print(f"  drop null sku: {len(df):,} / {before:,}")
+    # --- 1) Select required columns ---
+    keep_cols = [c for c in PROCESS_COLUMNS if c in df.columns]
+    missing_req = [c for c in ("sku", "order_id", "purchase_hour", "quantity", "total_sales") if c not in df.columns]
+    if missing_req:
+        raise ValueError(f"[{code}] missing required columns after append: {missing_req}")
+    df = df.loc[:, keep_cols].copy()
+    print(f"  [1] select columns: {len(keep_cols)} cols -> {len(df):,} rows")
 
-    # Market filter
-    markets = {str(m).strip() for m in geo_cfg.markets}
+    # --- 2) Drop blank purchase_hour ---
     before = len(df)
-    df = df[df["market"].astype(str).str.strip().isin(markets)].copy()
-    print(f"  market in {sorted(markets)}: {len(df):,} / {before:,}")
+    df = df[~_is_blank_series(df["purchase_hour"])].copy()
+    print(f"  [2] drop blank purchase_hour: {len(df):,} / {before:,}")
     if df.empty:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-    # Product vendor / sales-channel filter
-    vendors = {str(v).strip() for v in geo_cfg.vendors}
-    before = len(df)
-    df = df[df["sales-channel"].astype(str).str.strip().isin(vendors)].copy()
-    print(f"  vendor in {sorted(vendors)}: {len(df):,} / {before:,}")
-    if df.empty:
-        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+    # Market / vendor lists are bookmarked in geography.yaml — not filtered here
+    if geo_cfg.markets or geo_cfg.vendors:
+        print(
+            "  market/vendor filter: OFF "
+            f"(yaml bookmark markets={list(geo_cfg.markets)} "
+            f"vendors={list(geo_cfg.vendors)})"
+        )
 
+    # --- 3) Qty / signed sales ---
     df["quantity"] = (
         pd.to_numeric(df["quantity"], errors="coerce").fillna(0).round(0).astype(int)
     )
-    df = df[df["quantity"] != 0].copy()
-    df["total_sales"] = (
-        pd.to_numeric(df["total_sales"], errors="coerce").fillna(0).astype(float)
+    df["total_sales"] = pd.to_numeric(df["total_sales"], errors="coerce").fillna(0.0)
+    before = len(df)
+    df = df[(df["quantity"] != 0) | (df["total_sales"] != 0)].copy()
+    neg_sales = int((df["total_sales"] < 0).sum())
+    print(
+        f"  [3] keep qty!=0 or sales!=0: {len(df):,} / {before:,} "
+        f"(negative total_sales rows={neg_sales:,})"
     )
+    if df.empty:
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
+    # --- 4) Datetime from purchase_hour ---
     purchase_dt = _parse_purchase_dt(df["purchase_hour"])
     df = df.copy()
     df["_purchase_dt"] = purchase_dt
+    before = len(df)
+    df = df[df["_purchase_dt"].notna()].copy()
+    print(f"  [4] parse purchase_hour datetime: {len(df):,} / {before:,}")
+    if df.empty:
+        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+
     df["purchase_date"] = df["_purchase_dt"].dt.strftime("%Y-%m-%d")
-    df = df[
-        df["purchase_date"].notna()
-        & (df["purchase_date"].astype(str).str.strip() != "")
-        & (df["purchase_date"].astype(str).str.lower() != "nat")
-    ].copy()
     df["year_month"] = df["_purchase_dt"].dt.to_period("M").astype(str)
     df["year_month"] = df["year_month"].fillna("").astype(str)
     df["purchase_hour"] = df["_purchase_dt"].dt.hour
     df["purchase_time"] = df["_purchase_dt"].dt.strftime("%H:%M")
     df = df.drop(columns=["_purchase_dt"])
 
-    # knc_sku_cleaning with source=shopify (KCA- prefix for UK + IE; 200855 → KCA-200855)
-    print(f"  SKU clean via knc_sku_cleaning(source='shopify')")
+    # --- 5) SKU clean + map; fill missing with Not defined (do not drop) ---
+    print("  [5] SKU clean via knc_sku_cleaning(source='shopify'); missing -> Not defined")
     df = knc_sku_cleaning.clean_sku_column(
         df,
         sku_column="sku",
         sku_mapping=None,
-        drop_missing=True,
+        drop_missing=False,
         source="shopify",
     )
-    if df.empty:
-        return pd.DataFrame(columns=OUTPUT_COLUMNS)
+    missing_sku = _is_blank_series(df["sku"])
+    filled = int(missing_sku.sum())
+    df.loc[missing_sku, "sku"] = MISSING_SKU_LABEL
+    print(f"  [5] SKUs filled as '{MISSING_SKU_LABEL}': {filled:,}")
 
     if "order_id" in df.columns:
         df["order_id"] = (
@@ -523,16 +631,9 @@ def transform_geography_shopify_orders(
             df[col] = "UNKNOWN"
     df[group_cols] = df[group_cols].fillna("UNKNOWN")
 
-    pivoted = (
-        df.pivot_table(
-            index=group_cols,
-            values=["quantity", "total_sales"],
-            aggfunc="sum",
-        )
-        .reset_index()
-    )
-
+    pivoted = (df.pivot_table(index=group_cols,values=["quantity", "total_sales"],aggfunc="sum",).reset_index())
     print(f"  pivot rows: {len(pivoted):,}")
+
     pivoted = attach_shopify_city_state(code, pivoted)
     if "City" in pivoted.columns:
         pivoted = pivoted.rename(columns={"City": "city", "State": "state"})
@@ -543,19 +644,42 @@ def transform_geography_shopify_orders(
     if "pincode_new" not in pivoted.columns:
         pivoted["pincode_new"] = pivoted.get("pincode")
 
-    # Shopify COGS attributes (do not drop Inactive / Unknown for now)
+    # --- 6) COGS merge; missing product_name → Not defined ---
+    cogs = pd.DataFrame(columns=["sku", "product_name"])
     try:
         cogs = load_shopify_cogs(code)
         pivoted = pivoted.merge(cogs, on="sku", how="left")
-        for col in ("ASIN", "Product Category", "Product Name"):
-            if col in pivoted.columns:
-                pivoted[col] = pivoted[col].fillna("Unknown")
         from config_manager import cogs_local
 
         cogs_path = cogs_local.resolve_cogs_slice_path("KNC", code, channel="shopify")
-        print(f"  COGS merge: {cogs_path.name} (channel=shopify)")
+        print(f"  [6] COGS merge: {cogs_path.name} (channel=shopify)")
     except Exception as exc:  # noqa: BLE001
-        print(f"  [WARN] COGS merge skipped: {exc}")
+        print(f"  [6] [WARN] COGS merge skipped: {exc}")
+        if "product_name" not in pivoted.columns:
+            pivoted["product_name"] = pd.NA
+
+    if "product_name" not in pivoted.columns:
+        pivoted["product_name"] = pd.NA
+    name_blank = _is_blank_series(pivoted["product_name"])
+    pivoted.loc[name_blank, "product_name"] = MISSING_PRODUCT_NAME_LABEL
+    # Explicit: unmatched / Not defined SKU → Not defined product name
+    pivoted.loc[
+        pivoted["sku"].astype(str).str.strip().str.lower() == MISSING_SKU_LABEL.lower(),
+        "product_name",
+    ] = MISSING_PRODUCT_NAME_LABEL
+    print(
+        f"  [6] product_name filled as '{MISSING_PRODUCT_NAME_LABEL}': "
+        f"{int(name_blank.sum()):,}"
+    )
+
+    # --- 7) New SKUs in orders but not in COGS ---
+    print("  [7] new SKU check (orders vs Shopify COGS)")
+    _print_new_skus_vs_cogs(
+        pivoted,
+        cogs,
+        client=cfg.client_code,
+        geography_code=code,
+    )
 
     aov_df = (
         pivoted.groupby("year_month", as_index=False)
@@ -574,7 +698,9 @@ def transform_geography_shopify_orders(
 
     pivoted["quantity"] = pd.to_numeric(pivoted["quantity"], errors="coerce").fillna(0)
     pivoted["total_sales"] = pd.to_numeric(pivoted["total_sales"], errors="coerce").fillna(0.0)
-    pivoted = pivoted[pivoted["quantity"] != 0].copy()
+    pivoted = pivoted[
+        (pivoted["quantity"] != 0) | (pivoted["total_sales"] != 0)
+    ].copy()
 
     keep = [c for c in OUTPUT_COLUMNS if c in pivoted.columns]
     return pivoted.loc[:, keep].reset_index(drop=True)
@@ -603,14 +729,14 @@ def save_geography_outputs(
     name_suffix: str = PARQUET_NAME_SUFFIX,
 ) -> List[Path]:
     if df.empty:
-        print("[WARN] Nothing to save — DataFrame is empty")
+        print("[WARN] Nothing to save - DataFrame is empty")
         return []
     if "geography" not in df.columns:
         raise KeyError("Expected 'geography' column")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\n>>> STEP: save per-geography Shopify orders → {output_dir}")
+    print(f"\n>>> STEP: save per-geography Shopify orders -> {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
@@ -735,7 +861,10 @@ def build_shopify_orders_dataframe(
                 run_log.append(line)
 
         if apply_transform and not raw_df.empty:
-            print("\n>>> STEP: transform (market/vendor + SKU + pincode + pivot + COGS)")
+            print(
+                "\n>>> STEP: transform per geo "
+                "(select cols -> drop blank hour -> SKU Not defined -> COGS -> new SKUs)"
+            )
             frames: List[pd.DataFrame] = []
             for geography, geo_df in raw_df.groupby("geography", sort=True):
                 code = str(geography).strip().upper()
@@ -773,9 +902,13 @@ def build_shopify_orders_dataframe(
             master_df = _filter_df_to_geos(master_df, target_geos)
 
         if not master_df.empty:
-            print("\n>>> STEP: new SKU check vs Shopify COGS")
+            print("\n>>> STEP: new SKU check vs Shopify COGS (exclude 'Not defined')")
+            check_df = master_df[
+                master_df["sku"].astype(str).str.strip().str.lower()
+                != MISSING_SKU_LABEL.lower()
+            ].copy()
             check_final_dataframe_new_skus(
-                master_df,
+                check_df,
                 client=cfg.client_code,
                 label="shopify_orders",
                 channel="shopify",

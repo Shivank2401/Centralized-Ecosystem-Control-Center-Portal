@@ -1,9 +1,9 @@
 # Vector Datahive
 
-Module: `report_script.requirement_specific.vector_report`
+Module: `report_script.requirement_specific.vector_report_amazon`
 
 Requirement-specific Amazon inventory snapshot for **ESH and KNC**.
-Notebook source: `report_script/requirement_specific/vector_report.ipynb`.
+Notebook source: `report_script/requirement_specific/vector_report_amazon.ipynb`.
 
 ## Inputs (standard dataset)
 | Source | Path |
@@ -16,6 +16,8 @@ Notebook source: `report_script/requirement_specific/vector_report.ipynb`.
 | COGS | `cogs/{client}/{geo}_amazon_cogs.parquet` |
 
 Snapshot date: today → yesterday → latest available.
+
+Amazon-only geos: when the pipeline invokes this report for a shopify-only geo (e.g. KNC IE), the job **soft-skips** instead of failing.
 
 ## Checklist (per client / geo)
 Printed once after all geos finish (ordered), not interleaved by threads.
@@ -42,15 +44,15 @@ Final column is renamed back to `afn_fc_transfer_quantity`.
 
 ## Output
 ```
-sanity_data/{CLIENT}/vector_report/{geo}_{platform}_inventory_report.parquet
-sanity_data/{CLIENT}/vector_report/{geo}_{platform}_inventory_report.csv
+sanity_data/{CLIENT}/vector_report_amazon/{geo}_{platform}_inventory_report.parquet
+sanity_data/{CLIENT}/vector_report_amazon/{geo}_{platform}_inventory_report.csv
 ```
-Example: `sanity_data/ESH/vector_report/us_amazon_inventory_report.parquet`
+Example: `sanity_data/ESH/vector_report_amazon/us_amazon_inventory_report.parquet`
 
 ## Run
 ```bash
-python report_script/requirement_specific/vector_report.py --client ESH --geos US,AE,IN
-python report_script/requirement_specific/vector_report.py --client KNC
+python report_script/requirement_specific/vector_report_amazon.py --client ESH --geos US,AE,IN
+python report_script/requirement_specific/vector_report_amazon.py --client KNC
 ```
 
 Pipeline: Stage **requirement_specific** → Vector Datahive.

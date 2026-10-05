@@ -11,7 +11,7 @@ import { useToast } from '@/components/ui/Toast'
 import { api, ApiError } from '@/services/api'
 import { cn, formatStageLabel } from '@/utils/cn'
 
-const STEPS = ['Client', 'Geography', 'Stage', 'Reports', 'Review', 'Run'] as const
+const STEPS = ['Client', 'Geography', 'Stage', 'Reports', 'Review & Run'] as const
 
 function ChoiceChip({
   selected,
@@ -176,8 +176,8 @@ export function RunPipelinePage() {
         <PanelHeader
           title={STEPS[step]}
           description={
-            step === 5
-              ? 'Starts a background worker process. Only one run at a time.'
+            step === 4
+              ? 'Review selections, reorder reports, then start the run from this screen.'
               : 'Preserve report order; the executor will run top to bottom.'
           }
         />
@@ -298,7 +298,7 @@ export function RunPipelinePage() {
           )}
 
           {step === 4 && (
-            <div className="space-y-4 text-sm">
+            <div className="space-y-5 text-sm">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="rounded-md border border-[var(--border)] p-3">
                   <p className="font-mono text-[11px] text-[var(--fg-muted)] uppercase">Clients</p>
@@ -341,36 +341,35 @@ export function RunPipelinePage() {
                   ))}
                 </ul>
               </div>
-            </div>
-          )}
 
-          {step === 5 && (
-            <div className="space-y-4">
-              <p className="text-sm text-[var(--fg-muted)]">
-                Ready to execute{' '}
-                <span className="font-medium text-[var(--fg)]">{reports.length}</span> report(s) for{' '}
-                <span className="font-mono text-[var(--fg)]">{clients.join(',')}</span> /{' '}
-                <span className="font-mono text-[var(--fg)]">{geos.join(',')}</span>.
-              </p>
-              <pre className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-xs">
-                {JSON.stringify({ clients, geos, stage, reports }, null, 2)}
-              </pre>
-              {preflight ? (
-                <p className="font-mono text-xs text-[var(--color-ok)]">{preflight.message}</p>
-              ) : (
-                <p className="text-xs text-[var(--fg-muted)]">
-                  Start Run validates config/modules via the API, then spawns the pipeline worker.
+              <div className="space-y-3 border-t border-[var(--border)] pt-4">
+                <p className="text-sm text-[var(--fg-muted)]">
+                  Ready to execute{' '}
+                  <span className="font-medium text-[var(--fg)]">{reports.length}</span> report(s)
+                  for <span className="font-mono text-[var(--fg)]">{clients.join(',')}</span> /{' '}
+                  <span className="font-mono text-[var(--fg)]">{geos.join(',')}</span>.
                 </p>
-              )}
-              <Button
-                disabled={startRun.isPending || reports.length === 0}
-                onClick={() => {
-                  setPreflight(null)
-                  startRun.mutate()
-                }}
-              >
-                {startRun.isPending ? 'Validating & starting…' : 'Start Run'}
-              </Button>
+                <pre className="overflow-x-auto rounded-md border border-[var(--border)] bg-[var(--bg)] p-4 font-mono text-xs">
+                  {JSON.stringify({ clients, geos, stage, reports }, null, 2)}
+                </pre>
+                {preflight ? (
+                  <p className="font-mono text-xs text-[var(--color-ok)]">{preflight.message}</p>
+                ) : (
+                  <p className="text-xs text-[var(--fg-muted)]">
+                    Start Run validates config/modules via the API, then spawns the pipeline worker.
+                    Only one run at a time.
+                  </p>
+                )}
+                <Button
+                  disabled={startRun.isPending || reports.length === 0}
+                  onClick={() => {
+                    setPreflight(null)
+                    startRun.mutate()
+                  }}
+                >
+                  {startRun.isPending ? 'Validating & starting…' : 'Start Run'}
+                </Button>
+              </div>
             </div>
           )}
         </div>

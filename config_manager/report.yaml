@@ -274,15 +274,24 @@ reports:
     output_subdir: invalid_skus
     menu_order: 4
     enabled: true
-  vector_report:
+  vector_report_amazon:
     label: Vector Datahive
     stage: Requirement Specific
-    module: report_script.requirement_specific.vector_report
+    module: report_script.requirement_specific.vector_report_amazon
     clients:
     - ESH
     - KNC
-    output_subdir: vector_report
+    output_subdir: vector_report_amazon
     menu_order: 1
+    enabled: true
+  vector_report_shopify:
+    label: Vector Datahive Shopify
+    stage: Requirement Specific
+    module: report_script.requirement_specific.vector_report_shopify
+    clients:
+    - KNC
+    output_subdir: vector_report
+    menu_order: 2
     enabled: true
   emami_report:
     label: Emami UAE Report
@@ -291,7 +300,7 @@ reports:
     clients:
     - EMM
     output_subdir: emami_report
-    menu_order: 2
+    menu_order: 3
     enabled: true
   d_inventory_supply_chain:
     label: Inventory Supply Chain
@@ -300,7 +309,7 @@ reports:
     clients:
     - ESH
     output_subdir: inventory_supply_chain
-    menu_order: 3
+    menu_order: 4
     enabled: true
   pnl_report:
     label: PNL Report

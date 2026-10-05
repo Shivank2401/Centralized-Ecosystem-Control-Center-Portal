@@ -7,7 +7,8 @@
 #
 # excel_sheet = optional legacy workbook sheet name for want_to_update (Excel → Azure) only.
 # orders_sales_channel = Amazon (and similar) sales-channel filter for that channel.
-# markets / vendors = Shopify Market + Product vendor filters for that channel.
+# markets / vendors = Shopify Market + Product vendor bookmark (sell_thru uses vendors;
+#   orders_report does NOT filter on these — geo folder / sales root defines UK vs IE).
 geographies:
   ESH:
     US:
@@ -77,7 +78,8 @@ geographies:
           orders_sales_channel: Amazon.co.uk
         shopify:
           excel_sheet: Shopify
-          # Shopify CSV: Market + Product vendor (renamed sales-channel in ETL)
+          # BOOKMARK only (not used by shopify orders_report.py).
+          # Historical Market + Product vendor filters for UK Shopify CSVs.
           markets:
             - United Kingdom
           vendors:
@@ -91,6 +93,8 @@ geographies:
       channels:
         shopify:
           excel_sheet: Shopify
+          # BOOKMARK only (not used by shopify orders_report.py).
+          # Historical Market + Product vendor filters for IE Shopify CSVs.
           markets:
             - Ireland
             - International

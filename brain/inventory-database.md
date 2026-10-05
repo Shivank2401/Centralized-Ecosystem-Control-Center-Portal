@@ -33,7 +33,7 @@ sanity_data/{CLIENT}/inventory_database/{GEO}_inventory_database.csv
 sanity_data/{CLIENT}/logs/inventory_database/latest.log   # new SKUs + per-geo checklist
 ```
 
-Stock status (Overstock / Understock / Healthy) is computed in `vector_report`, not here — see `sanity_data/{CLIENT}/logs/vector/latest.log`.
+Stock status (Overstock / Understock / Healthy) is computed in `vector_report_amazon`, not here — see `sanity_data/{CLIENT}/logs/vector/latest.log`.
 
 ## Run
 ```bash

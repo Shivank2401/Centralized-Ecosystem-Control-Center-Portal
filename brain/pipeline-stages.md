@@ -39,7 +39,8 @@ See also: `brain/item-master.md`, `brain/meir-finance.md`, `brain/cogs.md`, `bra
 ## Stage 3 — requirement specific
 | Key | Script | Output |
 |-----|--------|--------|
-| vector_report | `requirement_specific.vector_report` | `sanity_data/{CLIENT}/vector_report/{geo}_{platform}_inventory_report.parquet` (+ `.csv`) |
+| vector_report_amazon | `requirement_specific.vector_report_amazon` | `sanity_data/{CLIENT}/vector_report_amazon/{geo}_{platform}_inventory_report.parquet` (+ `.csv`) |
+| vector_report_shopify | `requirement_specific.vector_report_shopify` | `sanity_data/KNC/vector_report/{geo}_shopify_inventory_report.parquet` (+ `.csv`) |
 | emami_report | `requirement_specific.emami_report` | `sanity_data/EMM/{inventory,ads,orders,…}/` + Excel; Azure upload prompted |
 | d_inventory_supply_chain | `requirement_specific.SC_inventory` | ESH inventory supply chain / instock (paths via `.env`; SKU clean via `esh_sku_cleaning`; ESH-only) |
 | pnl_report | `atros_code.pnl_report` | `sanity_data/KNC/pnl/` |
@@ -48,7 +49,7 @@ See also: `brain/item-master.md`, `brain/meir-finance.md`, `brain/cogs.md`, `bra
 | total_inventory | not wired yet | — |
 | city_state_orders | not wired yet (uses `orders_pincode.py` + `PINCODE_DATA_DIR`) | — |
 
-See also: `brain/vector-datahive.md`.
+See also: `brain/vector-datahive.md`, `brain/vector-datahive-shopify.md`.
 
 ## Stage 4 — sequence
 Runs stages 1 → 2 → 3 in order.

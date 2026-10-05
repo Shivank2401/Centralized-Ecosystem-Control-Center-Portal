@@ -47,7 +47,8 @@ Aligned with `amazon_reports/ledger_report.py`:
 1. Load Year/{PROCESS_YEARS} CSVs (+ optional root live)
 2. Normalize Shopify columns → rename to sku / Date / ending_balance
 3. SKU clean → date clean → groupby sku+date sum ending_balance
-4. Output cols: `client, client_id, geography, platform=shopify, date, sku, ending_balance`
+4. Output cols: `client, client_id, geography, platform=shopify, date, year_month, sku, ending_balance`
+   (`year_month` = `date.dt.strftime("%Y-%m")` after daily agg)
 
 ## Dedupe / merge
 Keys: `client`, `geography`, `date`, `sku`  

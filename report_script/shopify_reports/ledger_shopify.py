@@ -118,6 +118,7 @@ OUTPUT_COLS = [
     "geography",
     "platform",
     "date",
+    "year_month",
     "sku",
     "ending_balance",
 ]
@@ -449,7 +450,7 @@ def apply_ledger_date_cleaning(ledger_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =============================================================================
-# Transform
+# Transform (notebook-style steps)
 # =============================================================================
 
 def transform_geography_frame(
@@ -457,14 +458,26 @@ def transform_geography_frame(
     cfg: ClientShopifyLedgerConfig,
     geography_code: str,
 ) -> pd.DataFrame:
+    """
+    One geography — same order as the notebook:
+
+      1) rename columns
+      2) clean SKU
+      3) clean Day → date
+      4) ending_balance numeric
+      5) daily sum by sku + date
+      6) year_month from date  (YYYY-MM)
+      7) add client / geography / platform
+    """
     if geo_df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=OUTPUT_COLS)
 
     print(
         f"\n>>> STEP: transform [{cfg.client_code}] {geography_code} "
         f"({len(geo_df):,} raw rows)"
     )
 
+    # --- 1) notebook rename ---
     work = normalize_shopify_ledger_columns(geo_df)
     work = work.rename(
         columns={
@@ -479,24 +492,43 @@ def transform_geography_frame(
             f"got {list(work.columns)}"
         )
 
+    # --- 2) SKU clean ---
     work = knc_sku_cleaning.clean_sku_column(work, sku_column="sku", source="shopify")
     print(f"  After knc_sku_cleaning(source=shopify): {len(work):,} rows")
 
+    # --- 3) Day / Date → date ---
     work = apply_ledger_date_cleaning(work)
+
+    # --- 4) ending_balance numeric ---
     work["ending_balance"] = pd.to_numeric(
         work.get("ending_balance", 0), errors="coerce"
     ).fillna(0)
     work = work.dropna(subset=["sku", "date"])
 
+    # --- 5) daily agg (like notebook pivot / groupby) ---
     ledger_daily = (
         work.groupby(["sku", "date"], as_index=False)["ending_balance"].sum()
     )
+
+    # --- 6) year_month from date  →  e.g. 2026-09 ---
+    # Must happen BEFORE selecting OUTPUT_COLS (or the column is dropped).
+    ledger_daily["year_month"] = ledger_daily["date"].dt.strftime("%Y-%m")
+    print(
+        f"  year_month sample: "
+        f"{ledger_daily['year_month'].dropna().unique()[:5].tolist()}"
+    )
+
+    # --- 7) identity columns ---
     ledger_daily["geography"] = geography_code
     ledger_daily["client"] = cfg.client_code
     ledger_daily["client_id"] = cfg.client_id
     ledger_daily["platform"] = "shopify"
-    ledger_daily = ledger_daily.loc[:, OUTPUT_COLS]
-    out = ledger_daily.drop_duplicates().reset_index(drop=True)
+
+    out = (
+        ledger_daily.loc[:, OUTPUT_COLS]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
     print(f"  Result: {len(out):,} daily rows")
     return out
 
@@ -506,7 +538,7 @@ def transform_ledger(
     cfg: ClientShopifyLedgerConfig,
 ) -> pd.DataFrame:
     if raw_df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=OUTPUT_COLS)
 
     frames: List[pd.DataFrame] = []
     for geography, geo_df in raw_df.groupby("geography", sort=True):
@@ -519,7 +551,7 @@ def transform_ledger(
             print(f"  ERROR transforming {code}: {exc}")
 
     if not frames:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=OUTPUT_COLS)
     return pd.concat(frames, ignore_index=True, sort=False)
 
 

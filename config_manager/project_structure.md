@@ -83,7 +83,7 @@ Centralized Ecosystem Portal/
 │   ├── want_to_update/           # esh_cogs / knc_cogs / pincode / invalid_skus
 │   ├── utility_codes/            # MySQL import / image names / JSON→CSV
 │   ├── atros_code/               # KNC pnl / ads / decomposition
-│   ├── requirement_specific/     # vector_report / emami_report / SC_inventory
+│   ├── requirement_specific/     # vector_report_amazon / vector_report_shopify / emami_report / SC_inventory
 │   ├── shipping_queue/           # esh_shipping_queue / knc_shipping_queue (CLIENT_CONFIGS; >>> STEP)
 │   ├── awd_fees/ / mbr_report/   # packages (register in report.yaml when ready)
 │   └── item_master/              # (if present) Azure item-master CRUD
@@ -178,8 +178,10 @@ How do you want to run?
 **1 — Run a saved sequence**  
 Pick a named sequence from `config_manager/run_sequences.yaml`.
 
-**2 — Create / manage sequences**  
-Clients → Geographies → multi-stage report order → save (optionally run now).
+**2 — Create / manage sequences**
+- Create: clients → geographies → multi-stage report order → save (optionally run now)
+- **Modify**: pick a saved sequence → add/edit reports, change clients/geos, rename → save
+- Delete: remove a saved sequence
 
 **3 — Classic run**
 
@@ -214,7 +216,7 @@ python run_pipeline.py --sequence morning_esh_common
 | File | Role |
 |------|------|
 | `client.yaml` | Client code, name, `client_id`, `enabled`, `data_root_env`, `cogs_path_env`, `layout`, `geographies` |
-| `geography.yaml` | Per client → per geo × **channel**: local COGS stem `{geo}_{channel}_cogs`, Amazon `orders_sales_channel`, Shopify `markets`/`vendors`, optional `excel_sheet` (upload only) |
+| `geography.yaml` | Per client → per geo × **channel**: local COGS stem `{geo}_{channel}_cogs`, Amazon `orders_sales_channel`, Shopify `markets`/`vendors` (bookmark; sell_thru uses vendors; orders_report does not filter), optional `excel_sheet` (upload only) |
 | `report.yaml` | `report_stages` + reports (`stage`, optional `clients`, `module`, `menu_order`, `output_subdir`) |
 | `run_sequences.yaml` | Saved sequences (clients + geos + ordered reports) — CLI + Portal |
 | `paths.py` | Resolve `*_DATA_ROOT`, COGS, `SANITY_DATA_ROOT`, retail/revenue/walmart, pincode, … |
@@ -269,7 +271,8 @@ Default root: `Centralized Ecosystem Portal/sanity_data/`
 | `shopify_ledger` | `{CLIENT}/ledger/` | `{GEO}_shopify_ledger_inventory.parquet` + `.csv` (alongside Amazon ledger; not merged) |
 | `shopify_sell_thru` | `{CLIENT}/sell_thru/` | `{GEO}_shopify_sell_thru.parquet` + `.csv` (standalone; not merged into orders) |
 | `inventory_database` | `{CLIENT}/inventory_database/` | `{GEO}_inventory_database.parquet` + `.csv` |
-| `vector_report` | `{CLIENT}/vector_report/` | `{geo}_{platform}_inventory_report.*` |
+| `vector_report_amazon` | `{CLIENT}/vector_report_amazon/` | `{geo}_{platform}_inventory_report.*` |
+| `vector_report_shopify` | `{CLIENT}/vector_report/` | `{geo}_shopify_inventory_report.*` (KNC UK/IE) |
 | `emami_report` | `EMM/…` | Excel + CSV masters (see Emami brain note) |
 | `pnl_report` / `ad_sales_report` / `decomposition_chart` | `KNC/pnl|ads|decomposition_chart/` | per-geo + `final_*` |
 | retail / Walmart | local Excel/CSV + Azure | see retail scripts |

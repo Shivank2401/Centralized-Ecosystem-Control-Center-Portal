@@ -5,12 +5,12 @@ Covers:
   - Clients: ESH + KNC (geos via --geos / client.yaml)
   - Inputs: manage_fba, reserved, ledger, ageing, orders + cogs/{client}/{geo}_amazon_cogs
   - FC transfer: AE/IN from ageing.fc_transfer; else manage_fba (fallback reserved)
-  - Outputs: sanity_data/{CLIENT}/vector_report/{geo}_{platform}_inventory_report.parquet|.csv
+  - Outputs: sanity_data/{CLIENT}/vector_report_amazon/{geo}_{platform}_inventory_report.parquet|.csv
 
 Run:
-    python report_script/requirement_specific/vector_report.py
-    python report_script/requirement_specific/vector_report.py --client ESH --geos US,AE,IN
-    python report_script/requirement_specific/vector_report.py --client KNC --geos UK,DE,AE
+    python report_script/requirement_specific/vector_report_amazon.py
+    python report_script/requirement_specific/vector_report_amazon.py --client ESH --geos US,AE,IN
+    python report_script/requirement_specific/vector_report_amazon.py --client KNC --geos UK,DE,AE
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ SAVE_OUTPUT = True
 MAX_WORKERS = 4
 
 PARQUET_NAME_SUFFIX = "inventory_report"
-OUTPUT_SUBDIR = "vector_report"
+OUTPUT_SUBDIR = "vector_report_amazon"
 
 # Geos whose manage-FBA file has no afn_fc_transfer_quantity — use ageing.fc_transfer.
 FC_TRANSFER_FROM_AGEING_GEOS = {"AE", "IN"}
@@ -188,11 +188,17 @@ def get_vector_config(
         selected = [g for g in wanted if g in allowed]
         skipped = [g for g in wanted if g not in allowed]
         if skipped:
-            print(f"[WARN] [{code}] geos not in client.yaml, skipped: {skipped}")
-        if not selected:
-            raise ValueError(
-                f"No matching geos for {code}. Requested {wanted}, allowed {allowed}."
+            print(
+                f"[WARN] [{code}] geos not in amazon channel set, skipped: {skipped} "
+                f"(allowed={allowed})"
             )
+        if not selected:
+            # Soft-skip (e.g. pipeline sends KNC IE to amazon vector) — do not fail the run
+            print(
+                f"[SKIP] [{code}] vector_report_amazon - no matching amazon geos "
+                f"(requested={wanted}, allowed={allowed})"
+            )
+            selected = []
     else:
         selected = list(allowed)
 
@@ -1002,7 +1008,7 @@ def process_geography(
         amazon,
         client=client,
         geography_code=geo,
-        label="vector_report",
+        label="vector_report_amazon",
         quiet=True,
     )
 
@@ -1109,6 +1115,8 @@ def build_vector_dataframe(
     max_workers: int = MAX_WORKERS,
 ) -> pd.DataFrame:
     cfg = get_vector_config(client, geos)
+    if not cfg.geos:
+        return pd.DataFrame()
     configured_geos = _client_geos(cfg.client_code)
     today = pd.Timestamp.today().strftime("%Y-%m-%d")
     yesterday = (pd.Timestamp.today() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
@@ -1307,7 +1315,7 @@ def run(
 
 if __name__ == "__main__":
     main()
-    print_script_completed('vector_report')
+    print_script_completed('vector_report_amazon')
 
 
 

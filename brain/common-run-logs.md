@@ -48,7 +48,8 @@ Shopify reports use the same path with `channel=shopify` (e.g. `…/new_skus_vs_
 - `manage_fba_report.py`, `reserved_report.py`, `ageing_report.py`, `ledger_report.py`
 - `orders_report.py`
 - `inventory_database.py`
-- `requirement_specific/vector_report.py` (stock status lives here)
+- `requirement_specific/vector_report_amazon.py` (stock status lives here)
+- `requirement_specific/vector_report_shopify.py` (Shopify stock status; log key `vector_shopify`)
 
 ## Failure location (file / line)
 

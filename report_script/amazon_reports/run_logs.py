@@ -318,7 +318,7 @@ def format_inventory_database_geo_section(
     else:
         lines.append(
             "  Stock status counts: n/a "
-            "(computed in vector_report with MTQ thresholds, not inventory_database)"
+            "(computed in vector_report_amazon with MTQ thresholds, not inventory_database)"
         )
 
     skus = new_skus or []
