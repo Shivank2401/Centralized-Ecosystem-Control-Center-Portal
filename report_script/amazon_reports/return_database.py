@@ -8,7 +8,7 @@ Logic mirrors return_database.ipynb (easy to edit step-by-step):
   3. Enrich dates (year_month / hour / time)
   4. Clean sku via esh_sku_cleaning (same as orders)
   5. Pivot quantity
-  6. Save local + optional Azure upload
+  6. Append onto existing local master (or create) + optional Azure upload
 
 Paths:
   - Input:  {ESH_REVENUE}/{geo_folder}/input/amazon/fba_customer_returns/
@@ -42,7 +42,10 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config_manager import esh_sku_cleaning, layouts, paths
-from config_manager.report_helpers import print_script_completed
+from config_manager.report_helpers import (
+    merge_append_dedupe,
+    print_script_completed,
+)
 from report_script.amazon_reports.azure_parquet_upload import upload_parquets_to_azure
 
 # =============================================================================
@@ -56,11 +59,26 @@ PROCESS_YEARS: Optional[List[str]] = ["2026"]
 PROCESS_MONTHS: Optional[List[str]] = None
 SAVE_OUTPUT = True
 UPLOAD_TO_AZURE = True
+MERGE_WITH_EXISTING = True  # append new slice onto local master (create if missing)
 
 OUTPUT_SUBDIR = "returns"
 PARQUET_NAME_SUFFIX = "amazon_return_database"
 AZURE_BLOB_FOLDER = "sanity_data/return_report_database"
 RETURN_DIRECTORY_YAML = _PROJECT_ROOT / "config_manager" / "return_directory.yaml"
+
+# Keys used when appending onto an existing local master (keep='last' → new wins)
+DEDUPE_SUBSET = [
+    "geography",
+    "year_month",
+    "return_date",
+    "return_hour",
+    "order-id",
+    "sku",
+    "detailed-disposition",
+    "return_reason_group",
+    "customer_comment_group",
+    "source_file",
+]
 
 # --- notebook cell: columns to keep from raw files ---
 REQUIRED_COLS = [
@@ -578,12 +596,28 @@ def pivot_returns(returns_df: pd.DataFrame) -> pd.DataFrame:
 # STEP 6 — save local + Azure
 # =============================================================================
 
+def load_existing_geo_output(output_dir: Path, geography: str) -> pd.DataFrame:
+    """Load existing local master for one country (empty if file missing)."""
+    path = output_dir / f"{output_stem(geography)}.parquet"
+    if not path.is_file():
+        print(f"[INFO] No existing local file yet — will create: {path.name}")
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(path)
+        print(f"  Loaded existing {path.name}: {len(df):,} rows")
+        return df
+    except Exception as exc:
+        print(f"[WARN] Could not read {path.name}: {exc} — starting fresh")
+        return pd.DataFrame()
+
+
 def save_geography_outputs(
     df: pd.DataFrame,
     *,
     geography: str,
     output_dir: Path,
 ) -> List[Path]:
+    """Write/overwrite local CSV + parquet for one country."""
     if df.empty:
         print("[WARN] Nothing to save — DataFrame is empty")
         return []
@@ -610,6 +644,7 @@ def process_geography(
     months: Optional[Sequence[str]] = None,
     save_output: bool = SAVE_OUTPUT,
     upload_to_azure: bool = UPLOAD_TO_AZURE,
+    merge_existing: bool = MERGE_WITH_EXISTING,
 ) -> pd.DataFrame:
     geo = str(geography).strip().upper()
     print(f"\n{'=' * 60}")
@@ -649,12 +684,21 @@ def process_geography(
     pivoted["client_id"] = cfg.client_id
     pivoted["geography"] = geo
     pivoted["platform"] = "amazon"
-    print(f"[{geo}] Pivot rows: {len(pivoted):,}")
+    print(f"[{geo}] New pivot rows: {len(pivoted):,}")
 
-    if save_output:
+    if merge_existing:
+        print(f"\n>>> STEP: [{geo}] merge with existing local master")
+        existing = load_existing_geo_output(cfg.output_dir, geo)
+        master = merge_append_dedupe(
+            existing, pivoted, subset=DEDUPE_SUBSET
+        )
+    else:
+        master = pivoted
+
+    if save_output and not master.empty:
         print(f"\n>>> STEP: [{geo}] save local CSV + parquet -> {cfg.output_dir}")
         saved = save_geography_outputs(
-            pivoted, geography=geo, output_dir=cfg.output_dir
+            master, geography=geo, output_dir=cfg.output_dir
         )
         if upload_to_azure and saved:
             pq_paths = [p for p in saved if p.suffix.lower() == ".parquet"]
@@ -672,7 +716,7 @@ def process_geography(
     print(f"{'=' * 60}")
     print(f"Returns - {cfg.client_code}/{geo} - DONE")
     print(f"{'=' * 60}")
-    return pivoted
+    return master
 
 
 def build_returns_dataframe(
@@ -683,6 +727,7 @@ def build_returns_dataframe(
     *,
     save_output: bool = SAVE_OUTPUT,
     upload_to_azure: bool = UPLOAD_TO_AZURE,
+    merge_existing: bool = MERGE_WITH_EXISTING,
 ) -> pd.DataFrame:
     cfg = get_client_config(client)
     geos = PROCESS_GEOS if geos is None and PROCESS_GEOS is not None else geos
@@ -702,6 +747,7 @@ def build_returns_dataframe(
     print(f"Years  : {list(years)}")
     print(f"Months : {list(months) if months is not None else 'ALL'}")
     print(f"Geos   : {selected}")
+    print(f"Merge  : {merge_existing}")
     print(f"Output : {cfg.output_dir}")
     print(f"Azure  : {AZURE_BLOB_FOLDER}/ (upload={upload_to_azure})")
     print("=" * 60)
@@ -719,6 +765,7 @@ def build_returns_dataframe(
             months=months,
             save_output=save_output,
             upload_to_azure=upload_to_azure,
+            merge_existing=merge_existing,
         )
         if not frame.empty:
             frames.append(frame)
@@ -745,6 +792,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p.add_argument("--months", default=None, help="Comma-separated month tokens")
     p.add_argument("--no-save", action="store_true")
     p.add_argument("--no-azure", action="store_true")
+    p.add_argument(
+        "--no-merge",
+        action="store_true",
+        help="Overwrite local masters instead of append+dedupe",
+    )
     return p.parse_args(argv)
 
 
@@ -760,6 +812,7 @@ def main(argv: Optional[Sequence[str]] = None) -> pd.DataFrame:
         months=months,
         save_output=not args.no_save,
         upload_to_azure=UPLOAD_TO_AZURE and not args.no_azure,
+        merge_existing=MERGE_WITH_EXISTING and not args.no_merge,
     )
 
 
