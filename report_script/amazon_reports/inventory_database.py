@@ -5,7 +5,8 @@ Covers:
   - Clients: ESH + KNC (geos from client.yaml)
   - Inputs (must exist): manage_fba, reserved, ageing parquet under sanity_data/{CLIENT}/
   - Ageing date +1 for US/CA; FC transfer AE/IN from ageing else manage/reserved rules
-  - Outputs: sanity_data/{CLIENT}/inventory_database/{GEO}_inventory_database.parquet|.csv
+  - Outputs: sanity_data/{CLIENT}/inventory_database/{GEO}_amazon_inventory_database.parquet|.csv
+  - Azure: CONTAINER_NAME_{ESH|KNC}/sanity_data/inventory_report_database/{same parquet name}
 
 Does not re-read raw Amazon downloads — only merges sanity slices.
 
@@ -41,6 +42,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from config_manager import layouts, paths as cfg_paths
 from config_manager.loader import load_geographies
 from config_manager.report_helpers import print_script_completed
+from report_script.amazon_reports.azure_parquet_upload import upload_parquets_to_azure
 from report_script.amazon_reports.new_sku_check import (
     check_final_dataframe_new_skus,
 )
@@ -57,9 +59,11 @@ from report_script.amazon_reports.run_logs import (
 CLIENT = "ESH"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
 SAVE_OUTPUT = True
+UPLOAD_TO_AZURE = True
 
-PARQUET_NAME_SUFFIX = "inventory_database"
+PARQUET_NAME_SUFFIX = "amazon_inventory_database"
 OUTPUT_SUBDIR = "inventory_database"
+AZURE_BLOB_FOLDER = "sanity_data/inventory_report_database"
 
 # Default geo rules (apply to any client unless overridden)
 DEFAULT_AGEING_DATE_PLUS_ONE_GEOS = {"US", "CA"}
@@ -377,6 +381,7 @@ def build_inventory_database(
     client: str = CLIENT,
     geos: Optional[Sequence[str]] = None,
     save_output: bool = SAVE_OUTPUT,
+    upload_to_azure: bool = UPLOAD_TO_AZURE,
 ) -> pd.DataFrame:
     cfg = get_inventory_db_config(client, geos)
 
@@ -386,6 +391,7 @@ def build_inventory_database(
     print(f"Geos   : {cfg.geos}")
     print(f"Sanity : {cfg.sanity_root}")
     print(f"Output : {cfg.output_dir}")
+    print(f"Azure  : {upload_to_azure}")
     print(
         "Ageing date: US/CA +1 day; others +0. "
         "FC: AE/IN use ageing.fc_transfer; others use afn_fc_transfer_quantity; "
@@ -447,7 +453,14 @@ def build_inventory_database(
                 run_log.blank()
 
         if save_output and not master.empty:
-            save_geography_outputs(master, cfg.output_dir)
+            saved_paths = save_geography_outputs(master, cfg.output_dir)
+            if upload_to_azure and saved_paths:
+                upload_parquets_to_azure(
+                    saved_paths,
+                    client_code=cfg.client_code,
+                    blob_folder=AZURE_BLOB_FOLDER,
+                    label="inventory_database parquet",
+                )
     finally:
         run_log.flush()
 
@@ -467,6 +480,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--client", default=CLIENT, choices=known_clients())
     parser.add_argument("--geos", default=None, help="Comma-separated geo codes")
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument(
+        "--no-azure",
+        action="store_true",
+        help="Skip uploading saved parquet files to Azure",
+    )
     return parser.parse_args(argv)
 
 
@@ -477,6 +495,7 @@ def main(argv: Optional[Sequence[str]] = None) -> pd.DataFrame:
         client=args.client,
         geos=geos if geos else PROCESS_GEOS,
         save_output=not args.no_save,
+        upload_to_azure=UPLOAD_TO_AZURE and not args.no_azure,
     )
     if not master.empty:
         print(master.shape)

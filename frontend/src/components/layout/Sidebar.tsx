@@ -6,6 +6,7 @@ import {
   FileCode2,
   FileText,
   FolderCode,
+  CloudUpload,
   FolderOutput,
   GitBranch,
   History,
@@ -69,6 +70,7 @@ const groups: NavGroup[] = [
       { label: 'Logs', to: '/data/logs', icon: ScrollText },
       { label: 'COGS', to: '/data/cogs', icon: Database },
       { label: 'Pincode', to: '/data/pincode', icon: MapPinned },
+      { label: 'Azure Upload', to: '/data/azure-upload', icon: CloudUpload },
     ],
   },
 ]

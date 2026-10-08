@@ -61,6 +61,12 @@ report_stages:
     enabled: true
     clients:
     - KNC
+  shipping_queue:
+    label: 'Stage: Shipping Queue'
+    order: 11
+    enabled: true
+    clients:
+    - ESH
 reports:
   ageing:
     label: Ageing
@@ -121,6 +127,15 @@ reports:
     - KNC
     output_subdir: inventory_database
     menu_order: 6
+    enabled: true
+  return_database:
+    label: Return Database
+    stage: amazon_reports
+    module: report_script.amazon_reports.return_database
+    clients:
+    - ESH
+    output_subdir: returns
+    menu_order: 7
     enabled: true
   shopify_orders:
     label: Shopify Orders
@@ -355,4 +370,19 @@ reports:
     stage: utility_codes
     module: report_script.utility_codes.c_convert_json_to_csv
     menu_order: 3
+    enabled: true
+  d_export_file_to_azure:
+    label: Export file to Azure
+    stage: utility_codes
+    module: report_script.utility_codes.d_export_file_to_azure
+    menu_order: 4
+    enabled: true
+  esh_shipping_queue:
+    label: ESH Shipping Queue
+    stage: shipping_queue
+    module: report_script.shipping_queue.esh_shipping_queue
+    clients:
+    - ESH
+    output_subdir: shipping_queue
+    menu_order: 1
     enabled: true

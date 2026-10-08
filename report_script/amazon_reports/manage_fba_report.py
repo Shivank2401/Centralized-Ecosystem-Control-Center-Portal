@@ -5,7 +5,8 @@ Covers:
   - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
   - Source: manage_fba_inventory year-month folders; pivot AFN qty columns
   - No FC-transfer col for ESH AE/IN and KNC AE; KNC AE filters Title "Kinetica"
-  - Outputs: sanity_data/{CLIENT}/manage_fba/{GEO}_manage_fba_inventory.parquet|.csv
+  - Outputs: sanity_data/{CLIENT}/manage_fba/{GEO}_amazon_manage_fba_inventory.parquet|.csv
+  - Azure: CONTAINER_NAME_{ESH|KNC}/sanity_data/manage_fba_report_database/{same parquet name}
 
 Adding a NEW client (no ETL changes needed):
   1. Add client + geos in client.yaml / geography.yaml / layouts.py
@@ -49,6 +50,7 @@ from config_manager.report_helpers import (
 from config_manager import esh_sku_cleaning, knc_sku_cleaning, paths
 from config_manager import layouts
 from config_manager.report_helpers import print_script_completed
+from report_script.amazon_reports.azure_parquet_upload import upload_parquets_to_azure
 from report_script.amazon_reports.new_sku_check import (
     check_final_dataframe_new_skus,
 )
@@ -63,14 +65,16 @@ CLIENT = "ESH"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
 
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
-PROCESS_YEARS: Optional[List[str]] = [ "2026"]
+PROCESS_YEARS: Optional[List[str]] = ["2023", "2024", "2025", "2026"]
 PROCESS_MONTHS: Optional[List[str]] = None  # e.g. ["jul"], ["Jul-2026"], ["apr"]
 
 SAVE_OUTPUT = True
 APPLY_TRANSFORM = True
 MERGE_WITH_EXISTING = True
+UPLOAD_TO_AZURE = True
 
-PARQUET_NAME_SUFFIX = "manage_fba_inventory"
+PARQUET_NAME_SUFFIX = "amazon_manage_fba_inventory"
+AZURE_BLOB_FOLDER = "sanity_data/manage_fba_report_database"
 DEDUPE_SUBSET = ["client", "geography", "date", "sku"]
 
 KEEP_COLS = [
@@ -674,6 +678,7 @@ def build_manage_fba_dataframe(
     save_output: bool = SAVE_OUTPUT,
     apply_transform: bool = APPLY_TRANSFORM,
     merge_existing: bool = MERGE_WITH_EXISTING,
+    upload_to_azure: bool = UPLOAD_TO_AZURE,
     output_dir: Optional[Path] = None,
 ) -> Tuple[pd.DataFrame, List[dict], LoadStats]:
     cfg = get_client_config(client)
@@ -694,6 +699,7 @@ def build_manage_fba_dataframe(
     print(f"Geos   : {list(geos) if geos is not None else 'ALL enabled'}")
     print(f"Output : {out_dir}")
     print(f"Merge  : {merge_existing}")
+    print(f"Azure  : {upload_to_azure}")
     print("=" * 60)
 
     all_frames: List[pd.DataFrame] = []
@@ -769,7 +775,14 @@ def build_manage_fba_dataframe(
             )
 
         if save_output and not master_df.empty:
-            save_geography_outputs(master_df, output_dir=out_dir)
+            saved_paths = save_geography_outputs(master_df, output_dir=out_dir)
+            if upload_to_azure and saved_paths:
+                upload_parquets_to_azure(
+                    saved_paths,
+                    client_code=cfg.client_code,
+                    blob_folder=AZURE_BLOB_FOLDER,
+                    label="manage_fba parquet",
+                )
     finally:
         run_log.flush()
 
@@ -790,6 +803,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--months", default=None, help="Comma-separated month tokens")
     parser.add_argument("--no-merge", action="store_true")
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument(
+        "--no-azure",
+        action="store_true",
+        help="Skip uploading saved parquet files to Azure",
+    )
     return parser.parse_args(argv)
 
 
@@ -806,6 +824,7 @@ def main(argv: Optional[Sequence[str]] = None) -> Tuple[pd.DataFrame, List[dict]
         months=months,
         save_output=not args.no_save,
         merge_existing=not args.no_merge,
+        upload_to_azure=UPLOAD_TO_AZURE and not args.no_azure,
     )
     print(master_df.shape)
     print(master_df.head())

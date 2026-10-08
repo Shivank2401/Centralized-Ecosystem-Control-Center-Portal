@@ -5,7 +5,8 @@ Covers:
   - Clients: ESH (US, CA, UK, DE, AE, IN) and KNC (UK, DE, AE)
   - Source: amazon fba_inventory / KNC fba Inventory year-month folders
   - SKU clean via esh_sku_cleaning / knc_sku_cleaning + COGS sheets
-  - Outputs: sanity_data/{CLIENT}/ageing/{GEO}_ageing_inventory.parquet
+  - Outputs: sanity_data/{CLIENT}/ageing/{GEO}_amazon_ageing_inventory.parquet
+  - Azure: CONTAINER_NAME_{ESH|KNC}/sanity_data/ageing_report_database/{same filename}.parquet
   - Run log + new-SKU vs COGS under sanity_data/{CLIENT}/logs/
 
 Adding a NEW client (no ETL changes needed):
@@ -24,6 +25,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -63,16 +65,24 @@ CLIENT = "KNC"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
 
 VALID_YEARS = {"2023", "2024", "2025", "2026"}
-PROCESS_YEARS: Optional[List[str]] = [ "2026"]
+PROCESS_YEARS: Optional[List[str]] = [ "2023", "2024", "2025", "2026"]
 PROCESS_MONTHS: Optional[List[str]] = None
 
 SAVE_OUTPUT = True
 APPLY_TRANSFORM = True
 MERGE_WITH_EXISTING = True
+UPLOAD_TO_AZURE = True
 
-PARQUET_NAME_SUFFIX = "ageing_inventory"
+PARQUET_NAME_SUFFIX = "amazon_ageing_inventory"
+AZURE_BLOB_FOLDER = "sanity_data/ageing_report_database"
 MAX_DOS_CAP = 365
 DEDUPE_SUBSET = ["client", "geography", "date", "sku"]
+
+# client_code -> env var for Azure container name
+_AZURE_CONTAINER_ENV = {
+    "ESH": "CONTAINER_NAME_ESH",
+    "KNC": "CONTAINER_NAME_KNC",
+}
 
 
 # =============================================================================
@@ -657,6 +667,84 @@ def save_geography_outputs(
     return saved
 
 
+def _clean_env(value: str) -> str:
+    return str(value or "").strip().strip('"').strip("'")
+
+
+def _azure_connection_string() -> str:
+    conn = _clean_env(os.getenv("AZURE_STORAGE_CONNECTION_STRING", ""))
+    if conn:
+        return conn
+    account = _clean_env(os.getenv("AZURE_STORAGE_ACCOUNT_NAME", ""))
+    key = _clean_env(os.getenv("AZURE_STORAGE_ACCOUNT_KEY", ""))
+    if account and key:
+        return (
+            "DefaultEndpointsProtocol=https;"
+            f"AccountName={account};"
+            f"AccountKey={key};"
+            "EndpointSuffix=core.windows.net"
+        )
+    return ""
+
+
+def _azure_container_for_client(client_code: str) -> str:
+    key = str(client_code).strip().upper()
+    env_name = _AZURE_CONTAINER_ENV.get(key)
+    if not env_name:
+        return ""
+    return _clean_env(os.getenv(env_name, ""))
+
+
+def upload_ageing_parquets_to_azure(
+    parquet_paths: Sequence[Path],
+    *,
+    client_code: str,
+    blob_folder: str = AZURE_BLOB_FOLDER,
+) -> List[str]:
+    """
+    Upload the just-saved local ageing parquet masters to Azure.
+
+    Blob layout:
+      {CONTAINER_NAME_ESH|KNC}/sanity_data/ageing_report_database/{GEO}_amazon_ageing_inventory.parquet
+    """
+    if not parquet_paths:
+        return []
+
+    conn = _azure_connection_string()
+    container = _azure_container_for_client(client_code)
+    if not conn:
+        print("[azure] Skipped: missing AZURE_STORAGE_CONNECTION_STRING (or account/key)")
+        return []
+    if not container:
+        env_hint = _AZURE_CONTAINER_ENV.get(str(client_code).strip().upper(), "CONTAINER_NAME_*")
+        print(f"[azure] Skipped: missing {env_hint} for client {client_code}")
+        return []
+
+    from azure.storage.blob import BlobServiceClient, ContentSettings
+
+    folder = str(blob_folder or "").strip().strip("/").replace("\\", "/")
+    bsc = BlobServiceClient.from_connection_string(conn)
+    container_client = bsc.get_container_client(container)
+
+    uploaded: List[str] = []
+    print(f"\n>>> STEP: upload ageing parquet → {container}/{folder}/")
+    for path in parquet_paths:
+        path = Path(path)
+        if not path.is_file():
+            print(f"  [skip] missing local file: {path}")
+            continue
+        blob_path = f"{folder}/{path.name}" if folder else path.name
+        with path.open("rb") as fh:
+            container_client.get_blob_client(blob_path).upload_blob(
+                fh,
+                overwrite=True,
+                content_settings=ContentSettings(content_type="application/octet-stream"),
+            )
+        uploaded.append(f"{container}/{blob_path}")
+        print(f"  [ok] {path.name} -> {container}/{blob_path}")
+    return uploaded
+
+
 # =============================================================================
 # Build pipeline
 # =============================================================================
@@ -715,6 +803,7 @@ def build_ageing_dataframe(
     save_output: bool = SAVE_OUTPUT,
     apply_transform: bool = APPLY_TRANSFORM,
     merge_existing: bool = MERGE_WITH_EXISTING,
+    upload_to_azure: bool = UPLOAD_TO_AZURE,
     output_dir: Optional[Path] = None,
 ) -> Tuple[pd.DataFrame, List[dict], LoadStats]:
     cfg = get_client_config(client)
@@ -736,6 +825,7 @@ def build_ageing_dataframe(
     print(f"Geos   : {list(geos) if geos is not None else 'ALL enabled'}")
     print(f"Output : {out_dir}")
     print(f"Merge  : {merge_existing}")
+    print(f"Azure  : {upload_to_azure}")
     print("=" * 60)
 
     all_frames: List[pd.DataFrame] = []
@@ -811,7 +901,13 @@ def build_ageing_dataframe(
             )
 
         if save_output and not master_df.empty:
-            save_geography_outputs(master_df, output_dir=out_dir)
+            # Local masters = full merged frame (old + new). Those same files go to Azure.
+            saved_paths = save_geography_outputs(master_df, output_dir=out_dir)
+            if upload_to_azure and saved_paths:
+                upload_ageing_parquets_to_azure(
+                    saved_paths,
+                    client_code=cfg.client_code,
+                )
     finally:
         run_log.flush()
 
@@ -832,6 +928,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--months", default=None, help="Comma-separated month tokens")
     parser.add_argument("--no-merge", action="store_true")
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument(
+        "--no-azure",
+        action="store_true",
+        help="Skip uploading saved parquet files to Azure",
+    )
     return parser.parse_args(argv)
 
 
@@ -848,6 +949,7 @@ def main(argv: Optional[Sequence[str]] = None) -> Tuple[pd.DataFrame, List[dict]
         months=months,
         save_output=not args.no_save,
         merge_existing=not args.no_merge,
+        upload_to_azure=UPLOAD_TO_AZURE and not args.no_azure,
     )
     print(master_df.shape)
     print(master_df.head())

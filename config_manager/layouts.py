@@ -151,6 +151,21 @@ def esh_orders_geo_roots(base: Path | None = None) -> Dict[str, Path]:
     }
 
 
+def esh_returns_geo_roots(base: Path | None = None) -> Dict[str, Path]:
+    """
+    Absolute geo roots for ESH Amazon FBA customer returns under revenue/.
+
+    Pattern: {revenue}/{folder}/input/amazon/fba_customer_returns
+    """
+    from config_manager import paths as cfg_paths
+
+    root = base if base is not None else cfg_paths.esh_revenue_root()
+    return {
+        code: root / folder / "input" / "amazon" / "fba_customer_returns"
+        for code, folder in ESH_REVENUE_GEO_FOLDERS.items()
+    }
+
+
 def cli_argv(
     *,
     client: str,

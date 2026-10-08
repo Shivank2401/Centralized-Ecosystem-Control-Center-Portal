@@ -18,3 +18,8 @@ Examples: `manage_fba_report`, `reserved_report`, `ageing_report`, `ledger_repor
 
 ## Portal browse
 Configuration → Reports lists the package as `amazon_reports` under `report_script/`.
+
+## Geography column (not country)
+Sanity outputs use **`geography` only**. Do not also write a duplicate `country` column.
+- Inventory scripts (manage_fba / reserved / ageing / ledger / inventory_database) already used `geography` only.
+- `orders_report` previously set both; now geography-only. `prefer_geography_column()` drops legacy `country` when merging older masters.

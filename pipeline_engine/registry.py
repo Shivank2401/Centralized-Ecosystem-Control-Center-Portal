@@ -41,6 +41,7 @@ STAGE_PATHS: Dict[str, str] = {
     "atros": "report_script/atros_code",
     "item_master": "report_script/item_master",
     "shopify_reports": "report_script/shopify_reports",
+    "shipping_queue": "report_script/shipping_queue",
 }
 
 # Historical / label-derived keys → report_stages keys (and STAGE_PATHS).

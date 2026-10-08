@@ -50,7 +50,7 @@ cogs/knc/ie_shopify_cogs.csv
 sanity_data/KNC/orders/{GEO}_shopify_orders_database.parquet
 sanity_data/KNC/orders/{GEO}_shopify_orders_database.csv
 ```
-Does **not** merge into Amazon `{GEO}_orders_database.*`. Schema matches Amazon orders columns (`platform=shopify`) plus `product_name`.
+Does **not** merge into Amazon `{GEO}_orders_database.*`. Schema matches Amazon orders columns (`platform=shopify`) plus `product_name`. Uses **`geography` only** (not a duplicate `country` column).
 
 ## Note
 Many blank SKUs collapse into one pivot key `Not defined` (qty/sales summed together).

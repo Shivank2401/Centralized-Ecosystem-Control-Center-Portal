@@ -15,7 +15,7 @@
 | Runtime | **Python CLI** (`run_pipeline.py`) + **Portal** (`portal.py` → FastAPI `backend/` + React `frontend/`) |
 | UI | http://127.0.0.1:5173 → API :8000 → `pipeline_engine` → `report_script.*` |
 | Orchestration | Same YAML registry (`config_manager/*.yaml`) for CLI and portal |
-| Data explorers | Portal **Data** menu: Outputs / Logs / COGS / Pincode under `sanity_data/` |
+| Data explorers | Portal **Data** menu: Outputs / Logs / COGS / Pincode / Azure Upload |
 | Why | Batch ETL over local files + YAML; portal orchestrates without rewriting reports |
 
 ```bash
@@ -52,6 +52,7 @@ Centralized Ecosystem Portal/
 │   ├── geography.yaml
 │   ├── report.yaml               # report_stages + reports → Python modules
 │   ├── run_sequences.yaml        # saved run sequences (CLI + Portal)
+│   ├── return_directory.yaml     # FBA return reason map + customer-comment taxonomy/alerts
 │   ├── paths.py
 │   ├── loader.py
 │   ├── layouts.py
@@ -67,6 +68,7 @@ Centralized Ecosystem Portal/
 │   │   ├── manage_fba_report.py / reserved_report.py / ageing_report.py / ledger_report.py
 │   │   ├── orders_report.py      # 3-month Qty/Sales period table before export
 │   │   ├── inventory_database.py
+│   │   ├── return_database.py / .ipynb  # FBA returns (ESH); taxonomy → return_directory.yaml; esh_sku_cleaning
 │   │   ├── new_sku_check.py
 │   │   └── run_logs.py           # ReportRunLog → sanity_data/{CLIENT}/logs/
 │   ├── shopify_reports/          # Stage: shopify_reports (KNC UK+IE); CLIENT_CONFIGS
@@ -81,10 +83,10 @@ Centralized Ecosystem Portal/
 │   ├── retail/                   # a_kehe / b_sprouts / c_walmart_scintilla + azure_csv_sync (ESH CLIENT_CONFIGS; >>> STEP)
 │   ├── finance/                  # a_meir_finance_report.py (ESH CLIENT_CONFIGS; >>> STEP; month fallback)
 │   ├── want_to_update/           # esh_cogs / knc_cogs / pincode / invalid_skus
-│   ├── utility_codes/            # MySQL import / image names / JSON→CSV
+│   ├── utility_codes/            # MySQL import / image names / JSON→CSV / Azure upload
 │   ├── atros_code/               # KNC pnl / ads / decomposition
 │   ├── requirement_specific/     # vector_report_amazon / vector_report_shopify / emami_report / SC_inventory
-│   ├── shipping_queue/           # esh_shipping_queue / knc_shipping_queue (CLIENT_CONFIGS; >>> STEP)
+│   ├── shipping_queue/           # esh_shipping_queue (report.yaml) / knc_shipping_queue; esh_sku_cleaning + Azure upload
 │   ├── awd_fees/ / mbr_report/   # packages (register in report.yaml when ready)
 │   └── item_master/              # (if present) Azure item-master CRUD
 │
@@ -98,7 +100,7 @@ Centralized Ecosystem Portal/
 ├── backend/                      # FastAPI app (imported by portal.py)
 │   ├── main.py
 │   ├── api/                      # clients, geos, reports, stages, sequences, runs,
-│   │                             # explore (outputs/logs), config_mgmt, report_scripts, …
+│   │                             # explore, azure_export, config_mgmt, report_scripts, …
 │   ├── services/                 # config_*, run_service, explore_service, diagnostics, …
 │   ├── workers/run_worker.py     # isolated process; tees stdout → runtime/runs/{id}/stdout.log
 │   ├── schemas/ / repositories/ / utils/
@@ -109,7 +111,7 @@ Centralized Ecosystem Portal/
 │       │   ├── Dashboard.tsx / RunPipeline.tsx / ActiveRuns.tsx / RunHistory.tsx
 │       │   ├── RunDetail.tsx     # live SSE logs (auto-scroll) + overall progress
 │       │   ├── Logs.tsx          # Data → Logs (newest first + last-run datetime)
-│       │   ├── Outputs.tsx / CogsPincode.tsx / …
+│       │   ├── Outputs.tsx / CogsPincode.tsx / AzureUpload.tsx / …
 │       │   └── config/           # ConfigOverview, Clients, Geos, Reports (script packages),
 │       │                         # Environment, Files, History, Sequences
 │       ├── components/layout/Sidebar.tsx
@@ -331,7 +333,7 @@ On success (no exception):
 | `helper_files_nd_saving/` | Helper files, 3G/Updike, raw archive (ESH + KNC), COGS download |
 | `requirement_specific/` | Built on `sanity_data` (vector, Emami, SC inventory) |
 | `want_to_update/` | COGS upload, pincode, invalid SKUs |
-| `utility_codes/` | Standalone helpers |
+| `utility_codes/` | Standalone helpers (incl. `d_export_file_to_azure`) |
 | `retail/` / `finance/` / `atros_code/` | Client-specific packages |
 
 ---
@@ -369,7 +371,7 @@ Hide: `enabled: false`. Portal **Developer → Add Report** can also register up
 
 **Retail** (`retail/`): KeHE, Sprouts, Walmart Scintilla — ESH `CLIENT_CONFIGS` + `>>> STEP`; shared `azure_csv_sync` for KeHE/Sprouts CSV append. ETL / Azure semantics unchanged.
 
-**Shipping queue** (`shipping_queue/`): separate ESH / KNC scripts with `CLIENT_CONFIGS` + `>>> STEP` + pipeline `run(client=, geos=)`. Clean/discrepancy formulas unchanged.
+**Shipping queue** (`shipping_queue/`): registered stage `shipping_queue` in `report.yaml` + `STAGE_PATHS`. Geos from pipeline/CLI (not `.env` cogs_sheet_*). ESH uses `esh_sku_cleaning` like orders; local `sanity_data/ESH/shipping_queue/{GEO}_*`; Azure `CONTAINER_NAME_ESH` → `sanity_data/shipping_queue/{GEO}_amazon_shipping_queue.csv|.parquet`. KNC script remains separate.
 
 ---
 

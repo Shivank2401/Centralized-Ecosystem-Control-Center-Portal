@@ -12,6 +12,7 @@ import { AddReportPage } from '@/pages/AddReport'
 import { ReportRegistryPage } from '@/pages/ReportRegistry'
 import { OutputsPage } from '@/pages/Outputs'
 import { LogsPage } from '@/pages/Logs'
+import { AzureUploadPage } from '@/pages/AzureUpload'
 import { CogsPage, PincodePage } from '@/pages/CogsPincode'
 import { ConfigOverviewPage } from '@/pages/config/ConfigOverview'
 import { ConfigClientsPage } from '@/pages/config/ConfigClients'
@@ -63,6 +64,7 @@ export function AppRouter() {
         <Route path="data/logs" element={<LogsPage />} />
         <Route path="data/cogs" element={<CogsPage />} />
         <Route path="data/pincode" element={<PincodePage />} />
+        <Route path="data/azure-upload" element={<AzureUploadPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

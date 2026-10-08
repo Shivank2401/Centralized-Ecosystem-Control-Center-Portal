@@ -3,21 +3,18 @@
 ESH Amazon Shipping Queue — download, SKU-map, clean, upload by country.
 
 Covers:
-  - Client: ESH — countries from cogs_sheet_{cc}=… in .env
-  - Raw Azure: data_dump/shipping_queue/amazon/YYYY/MM/DD/{cc}_shipments_summary.csv
-  - SKU map: cogs/esh/{cc}_amazon_cogs (ON_1..ON_5) or Azure helper_files/cogs
-  - Local: PROCESSED_ROOT/shipping_queue/ESH-{cc}-Amazon_Shipping_Queue_azure.csv
-  - Azure out: sanity_data/shipping_queue/{cc}_amazon_shipping_queue.csv (+ parquet)
-
-Adding a NEW client:
-  Prefer a dedicated script (like knc_shipping_queue.py) with its own env keys,
-  or register CLIENT_CONFIGS below if paths/COGS alias rules match ESH.
+  - Client: ESH — geos from pipeline/CLI (or geography.yaml amazon geos)
+  - Raw Azure: CONTAINER_NAME_ESH → data_dump/shipping_queue/amazon/...
+  - SKU map: esh_sku_cleaning (same as orders_report) via local cogs slices
+  - Local: sanity_data/ESH/shipping_queue/{GEO}_amazon_shipping_queue.parquet|.csv
+  - Azure out: CONTAINER_NAME_ESH → sanity_data/shipping_queue/{GEO}_amazon_shipping_queue.csv|.parquet
 
 Style: step-by-step prints (>>> STEP). Clean/discrepancy formulas unchanged.
 
 Run:
     python report_script/shipping_queue/esh_shipping_queue.py
     python report_script/shipping_queue/esh_shipping_queue.py --countries US,AE
+    # pipeline: run(client='ESH', geos=['US'])
 """
 
 from __future__ import annotations
@@ -25,13 +22,12 @@ from __future__ import annotations
 import argparse
 import io
 import os
-import re
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
-from typing import Callable, Dict, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -42,7 +38,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from config_manager import esh_sku_cleaning, layouts, paths
 from config_manager.report_helpers import print_script_completed
+from report_script.amazon_reports.azure_parquet_upload import (
+    azure_connection_string,
+    azure_container_for_client,
+)
 
 # =============================================================================
 # Client configuration (ESH — KNC lives in knc_shipping_queue.py)
@@ -55,18 +56,12 @@ CLIENT = "ESH"
 class ShippingQueueClientConfig:
     client_code: str
     local_file_prefix: str
-    processed_root_env: str
-    default_processed_root: str
-    geo_env_pattern: str
 
 
 def _esh_config() -> ShippingQueueClientConfig:
     return ShippingQueueClientConfig(
         client_code="ESH",
         local_file_prefix="ESH",
-        processed_root_env="PROCESSED_ROOT",
-        default_processed_root="processed_output",
-        geo_env_pattern=r"^cogs_sheet_([a-z0-9_]+)$",
     )
 
 
@@ -87,33 +82,34 @@ def get_client_config(client: str = CLIENT) -> ShippingQueueClientConfig:
 # STORAGE PATHS — where files live (input vs output)
 # =============================================================================
 #
-# RAW INPUT (container CONTAINER_NAME_ESH_RAW, e.g. thrive-client-ecosoulhome):
+# RAW INPUT (container CONTAINER_NAME_ESH):
 #   data_dump/shipping_queue/amazon/YYYY/MM/DD/{cc}_shipments_summary.csv
-#   Filename country code may be lower- or uppercase (Azure is case-sensitive; we try both).
-#   Country codes elsewhere in this script use lowercase (e.g. uk, ae, us).
-#   If today's file is missing, walks back up to LOOKBACK_DAYS (see azure_shipping_queue_csv_blob_path).
 #
-# COGS / SKU MAPPING (aliases → master SKU):
-#   Prefer local: cogs/esh/{cc}_amazon_cogs.parquet|.csv
-#   Azure fallback: {BLOB_PREFIX_COGS}/{cc}_amazon_cogs.* in CONTAINER_NAME_ESH
-#   Default Azure prefix: helper_files/cogs  (set BLOB_PREFIX_COGS in .env)
+# COGS / SKU MAPPING:
+#   esh_sku_cleaning.load_sku_mapping / clean_sku_column (local cogs slices)
 #
-# PROCESSED OUTPUT — after cleaning:
-#   Local (default):  <PROCESSED_ROOT>/shipping_queue/ESH-{cc}-Amazon_Shipping_Queue_azure.csv
-#   Azure CSV/Parquet include a client_id column (from CLIENT_ID in .env).
-#   Azure CSV (CONTAINER_NAME_ESH_RAW):
-#     sanity_data/shipping_queue/{cc}_amazon_shipping_queue.csv
-#   Azure Parquet (CONTAINER_NAME_ESH_RAW):
-#     processed/parquet/shipping_queue/{cc}_amazon_shipping_queue.parquet
-#   {cc} = lowercase 2-letter country code.
+# LOCAL OUTPUT (orders-style):
+#   sanity_data/{CLIENT}/shipping_queue/{GEO}_amazon_shipping_queue.parquet|.csv
 #
-# Set PROCESSED_ROOT in .env or pass --output-folder on the command line.
+# AZURE OUTPUT (CONTAINER_NAME_ESH | CONTAINER_NAME_KNC):
+#   sanity_data/shipping_queue/{GEO}_amazon_shipping_queue.csv|.parquet
 
-PROCESSED_ROOT = os.environ.get("PROCESSED_ROOT", "processed_output")
-DEFAULT_OUTPUT_FOLDER = os.path.join(PROCESSED_ROOT, "shipping_queue")
+OUTPUT_SUBDIR = "shipping_queue"
+NAME_SUFFIX = "amazon_shipping_queue"
+AZURE_BLOB_FOLDER = "sanity_data/shipping_queue"
 
-PROCESSED_CSV_PREFIX = "sanity_data/shipping_queue"
-PROCESSED_PARQUET_PREFIX = "processed/parquet/shipping_queue"
+
+def output_dir_for(client_code: str = CLIENT) -> Path:
+    """Local root: sanity_data/{CLIENT}/shipping_queue (mirrors orders)."""
+    return paths.sanity_data_root() / str(client_code).strip().upper() / OUTPUT_SUBDIR
+
+
+def country_output_stem(country_code: str) -> str:
+    """e.g. US_amazon_shipping_queue (uppercase country code + suffix)."""
+    return f"{normalize_country_code(country_code).upper()}_{NAME_SUFFIX}"
+
+
+DEFAULT_OUTPUT_FOLDER = str(output_dir_for(CLIENT))
 
 # =============================================================================
 # COLUMN DEFINITIONS — raw Amazon export → cleaned snake_case names
@@ -155,13 +151,9 @@ COL_RENAME = {
 # Parsed to YYYY-MM-DD strings after cleaning
 DATE_COLS = ["creating_date", "receiving_date", "shipped_date", "closed_date"]
 
-# COGS Excel columns used to build alias → master SKU map
-COGS_ALIAS_COLS = ["ON_1", "ON_2", "ON_3", "ON_4", "ON_5"]
-
 # =============================================================================
-# GEOGRAPHY — enabled countries (from .env cogs_sheet_{cc}=...)
+# GEOGRAPHY — pipeline/CLI geos (SKU cleaning uses esh_sku_cleaning + local COGS)
 # =============================================================================
-# Keys like cogs_sheet_us=ESH-USA define which countries to process (value is optional label).
 
 
 def _clean_env(value: str) -> str:
@@ -178,35 +170,67 @@ def normalize_country_code(country_code: str) -> str:
     return cc
 
 
-def get_client_id() -> str:
+def get_client_id(client_code: str = CLIENT) -> str:
     """Client identifier appended to Azure CSV/Parquet exports."""
-    client_id = _clean_env(os.getenv("CLIENT_ID", ""))
-    if not client_id:
-        raise ValueError("CLIENT_ID is required in .env for Azure CSV/Parquet uploads")
-    return client_id
+    env_id = _clean_env(os.getenv("CLIENT_ID", ""))
+    if env_id:
+        return env_id
+    return str(layouts.client_identity(client_code).get("client_id") or "").strip()
 
 
-def dataframe_with_client_id(df: pd.DataFrame) -> pd.DataFrame:
-    """Add client_id as the first column (Azure processed exports only)."""
+def dataframe_with_client_id(df: pd.DataFrame, client_code: str = CLIENT) -> pd.DataFrame:
+    """Add client_id as the first column (Azure / local parquet exports)."""
     out = df.copy()
     if "client_id" in out.columns:
         out = out.drop(columns=["client_id"])
-    out.insert(0, "client_id", get_client_id())
+    client_id = get_client_id(client_code)
+    if client_id:
+        out.insert(0, "client_id", client_id)
     return out
 
 
-def load_geographies_from_env() -> dict[str, dict[str, str]]:
-    """
-    Build { 'us': {'country_code': 'us'}, ... } from keys like cogs_sheet_us=... in .env.
-    """
-    geos: dict[str, dict[str, str]] = {}
-    pattern = re.compile(r"^cogs_sheet_([a-z0-9_]+)$", re.IGNORECASE)
-    for key, value in os.environ.items():
-        match = pattern.match(key)
-        if not match:
+def default_amazon_geos(client_code: str = CLIENT) -> List[str]:
+    """Amazon geos from geography.yaml / layouts (no .env cogs_sheet_* needed)."""
+    sheets = layouts.cogs_sheets_for(client_code, channel="amazon") or {}
+    codes: List[str] = []
+    for geo in sheets.keys():
+        try:
+            codes.append(normalize_country_code(str(geo)))
+        except ValueError:
             continue
-        code = normalize_country_code(match.group(1))
-        geos[code] = {"country_code": code}
+    return sorted(set(codes))
+
+
+def resolve_geographies(
+    requested: Optional[Sequence[str]] = None,
+    *,
+    client_code: str = CLIENT,
+) -> dict[str, dict[str, str]]:
+    """
+    Build { 'us': {'country_code': 'us'}, ... }.
+
+    Prefer explicit pipeline/CLI geos; otherwise all amazon geos for the client.
+    """
+    if requested:
+        tokens = [str(g).strip() for g in requested if str(g).strip()]
+        if tokens and not any(t.lower() == "all" for t in tokens):
+            geos: dict[str, dict[str, str]] = {}
+            unknown: List[str] = []
+            for raw in tokens:
+                try:
+                    code = normalize_country_code(raw)
+                except ValueError:
+                    unknown.append(raw)
+                    continue
+                geos[code] = {"country_code": code}
+            if unknown:
+                print(f"Unknown/invalid countries skipped: {', '.join(unknown)}")
+            return geos
+
+    geos = {
+        code: {"country_code": code}
+        for code in default_amazon_geos(client_code)
+    }
     return geos
 
 
@@ -216,18 +240,15 @@ def load_geographies_from_env() -> dict[str, dict[str, str]]:
 
 
 def load_azure_settings() -> tuple[str, str]:
-    """Return (connection_string, helper_container) from environment.
-
-    helper_container (CONTAINER_NAME_ESH) holds COGS / processed outputs (e.g. app-helper).
-    """
-    conn = _clean_env(os.getenv("AZURE_STORAGE_CONNECTION_STRING", ""))
-    container = _clean_env(os.getenv("CONTAINER_NAME_ESH", ""))
+    """Return (connection_string, CONTAINER_NAME_ESH) from environment."""
+    conn = azure_connection_string()
+    container = azure_container_for_client(CLIENT)
     return conn, container
 
 
 def load_raw_shipping_container() -> str:
-    """Container for raw shipping queue CSVs (CONTAINER_NAME_ESH_RAW)."""
-    return _clean_env(os.getenv("CONTAINER_NAME_ESH_RAW", ""))
+    """Container for raw shipping queue CSVs (CONTAINER_NAME_ESH)."""
+    return _clean_env(os.getenv("CONTAINER_NAME_ESH", ""))
 
 
 # =============================================================================
@@ -309,7 +330,7 @@ def download_shipping_queue_csv(
         raise ValueError("AZURE_STORAGE_CONNECTION_STRING is missing in .env")
     if not cont_use:
         raise ValueError(
-            "CONTAINER_NAME_ESH_RAW is missing in .env "
+            "CONTAINER_NAME_ESH is missing in .env "
             "(raw shipping CSVs container, e.g. thrive-client-ecosoulhome)"
         )
 
@@ -344,96 +365,14 @@ def download_shipping_queue_csv(
 
 
 # =============================================================================
-# COGS — SKU alias mapping (merchant SKU → master SKU from product catalog)
+# COGS / SKU — same path as orders_report (esh_sku_cleaning + local cogs slices)
 # =============================================================================
 
 
-def build_sku_mapping(convertor_helper: pd.DataFrame) -> dict[str, str]:
-    """
-    Build uppercase alias → master SKU from COGS columns SKU + ON_1..ON_5.
-
-    Each row's SKU is the canonical master; ON_* cells are alternate listings.
-    """
-    mapping: dict[str, str] = {}
-    for _, row in convertor_helper.iterrows():
-        master = str(row.get("SKU", "")).strip()
-        if not master or master.lower() == "nan":
-            continue
-        mapping[master.upper()] = master
-        for col in COGS_ALIAS_COLS:
-            if col not in convertor_helper.columns:
-                continue
-            alias = str(row.get(col, "")).strip()
-            if alias and alias.lower() != "nan":
-                mapping[alias.upper()] = master
-    return mapping
-
-
-def clean_sku_column(
-    df: pd.DataFrame,
-    *,
-    sku_column: str = "sku",
-    sku_mapping: dict[str, str],
-) -> pd.DataFrame:
-    """Replace alias SKUs with master SKU where a mapping exists."""
-    out = df.copy()
-    keys = out[sku_column].astype(str).str.strip().str.upper()
-    out[sku_column] = keys.map(sku_mapping).fillna(out[sku_column])
-    return out
-
-
-def load_cogs_from_azure(country_code: str) -> pd.DataFrame:
-    """
-    Load COGS for one country.
-
-    Prefer local project slice: cogs/esh/{cc}_amazon_cogs.parquet|.csv
-    Fall back to Azure blob under BLOB_PREFIX_COGS.
-    """
-    from config_manager import cogs_local
-
+def load_sku_mapping_for_country(country_code: str) -> dict[str, str]:
+    """Load alias → master SKU map for one geo via esh_sku_cleaning (local COGS)."""
     cc = normalize_country_code(country_code)
-    try:
-        df = cogs_local.read_cogs_slice("ESH", cc, channel="amazon")
-        return cogs_local.to_pascal_sku_alias_frame(
-            df, COGS_ALIAS_COLS
-        ).drop_duplicates()
-    except FileNotFoundError as exc:
-        print(f"[cogs] Local miss ({exc}); trying Azure...")
-
-    conn, container = load_azure_settings()
-    if not conn or not container:
-        raise ValueError(
-            "Azure settings missing. Set AZURE_STORAGE_CONNECTION_STRING and CONTAINER_NAME_ESH in .env"
-        )
-
-    prefix = _clean_env(os.getenv("BLOB_PREFIX_COGS", "helper_files/cogs")).strip("/")
-    stem = f"{prefix}/{cc}_amazon_cogs"
-
-    bsc = BlobServiceClient.from_connection_string(conn)
-    container_client = bsc.get_container_client(container)
-
-    candidates = [
-        (f"{stem}.parquet", "parquet"),
-        (f"{stem}.csv", "csv"),
-    ]
-    for blob_path, fmt in candidates:
-        blob_client = container_client.get_blob_client(blob_path)
-        if not blob_client.exists():
-            continue
-        print(f"[cogs] Downloading from Azure ({fmt}): {container}/{blob_path}")
-        raw = blob_client.download_blob().readall()
-        if fmt == "parquet":
-            df = pd.read_parquet(io.BytesIO(raw)).drop_duplicates()
-        else:
-            text = raw.decode("utf-8", errors="replace")
-            df = pd.read_csv(StringIO(text)).drop_duplicates()
-        return cogs_local.to_pascal_sku_alias_frame(df, COGS_ALIAS_COLS)
-
-    tried = ", ".join(path for path, _ in candidates)
-    raise FileNotFoundError(
-        f"No COGS file for '{cc}' in cogs/esh/ or Azure. Checked local + {tried}. "
-        "Run Stage want_to_update → ESH COGS first."
-    )
+    return esh_sku_cleaning.load_sku_mapping(geos=[cc.upper()], channel="amazon")
 
 
 # =============================================================================
@@ -522,7 +461,28 @@ def process_shipping_queue(
         main["sku"].astype(str).str.replace(r"-{1,2}$", "", regex=True).str.strip()
     )
 
-    main = clean_sku_column(main, sku_column="sku", sku_mapping=sku_mapping)
+    # Same cleaner as orders_report, but keep merchant SKU when cleaner yields null
+    # (shipping queue must retain shipment lines; orders drops missing more aggressively).
+    before_sku = main["sku"].astype(str).str.strip()
+    rows_before = len(main)
+    main = esh_sku_cleaning.clean_sku_column(
+        main,
+        sku_column="sku",
+        sku_mapping=sku_mapping,
+        drop_missing=False,
+    )
+    still_missing = main["sku"].isna()
+    if still_missing.any():
+        restored = before_sku.loc[still_missing].str.upper()
+        restored = restored.replace({"NAN": np.nan, "NONE": np.nan, "": np.nan})
+        main.loc[still_missing, "sku"] = restored
+        print(
+            f"  Kept {int(still_missing.sum()):,} merchant SKU(s) without COGS master match"
+        )
+    main = main[main["sku"].notna()].copy()
+    dropped = rows_before - len(main)
+    if dropped:
+        print(f"  Dropped {dropped:,} row(s) with empty SKUs")
     main["platform"] = "amazon"
     return main
 
@@ -573,50 +533,109 @@ def save_local_csv(df: pd.DataFrame, output_path: str) -> pd.DataFrame:
     return final_df
 
 
-def upload_processed_to_azure(df: pd.DataFrame, country_code: str) -> None:
+def local_output_paths(country_code: str, output_dir: Path | None = None) -> tuple[Path, Path]:
     """
-    Upload cleaned queue to Azure as CSV and Parquet (includes client_id column).
+    Local CSV + parquet paths:
+      sanity_data/ESH/shipping_queue/{COUNTRY_CODE}_amazon_shipping_queue.parquet|.csv
+    """
+    out = Path(output_dir) if output_dir else output_dir_for(CLIENT)
+    stem = country_output_stem(country_code)
+    return out / f"{stem}.csv", out / f"{stem}.parquet"
 
-    Destinations (container = CONTAINER_NAME_ESH_RAW):
-      CSV:     sanity_data/shipping_queue/{cc}_amazon_shipping_queue.csv
-      Parquet: processed/parquet/shipping_queue/{cc}_amazon_shipping_queue.parquet
+
+def save_local_outputs(
+    df: pd.DataFrame,
+    country_code: str,
+    output_dir: Path | None = None,
+    *,
+    client_code: str = CLIENT,
+) -> tuple[pd.DataFrame, Path, Path]:
+    """Save CSV (append+dedupe) and parquet (overwrite) with client_id."""
+    csv_path, pq_path = local_output_paths(country_code, output_dir)
+    upload_df = dataframe_with_client_id(df, client_code)
+
+    final_df = save_local_csv(upload_df, str(csv_path))
+    # Re-apply client_id after append merge, then write both formats
+    final_df = dataframe_with_client_id(final_df, client_code)
+    final_df.to_csv(csv_path, index=False)
+    pq_path.parent.mkdir(parents=True, exist_ok=True)
+    final_df.to_parquet(pq_path, index=False, engine="pyarrow")
+    print(f"[save] Local CSV ({len(final_df)} rows): {csv_path}")
+    print(f"[save] Local parquet ({len(final_df)} rows): {pq_path}")
+    return final_df, csv_path, pq_path
+
+
+def upload_outputs_to_azure(
+    df: pd.DataFrame,
+    country_code: str,
+    *,
+    csv_path: Optional[Path] = None,
+    parquet_path: Optional[Path] = None,
+    client_code: str = CLIENT,
+) -> list[str]:
     """
-    conn, _helper_container = load_azure_settings()
-    raw_container = load_raw_shipping_container()
+    Upload cleaned queue to CONTAINER_NAME_ESH|KNC:
+
+      sanity_data/shipping_queue/{COUNTRY_CODE}_amazon_shipping_queue.csv
+      sanity_data/shipping_queue/{COUNTRY_CODE}_amazon_shipping_queue.parquet
+    """
+    conn = azure_connection_string()
+    container = azure_container_for_client(client_code)
     if not conn:
         print("[upload] Skipped: missing AZURE_STORAGE_CONNECTION_STRING")
-        return
-    if not raw_container:
-        print("[upload] Skipped: missing CONTAINER_NAME_ESH_RAW")
-        return
+        return []
+    if not container:
+        print(f"[upload] Skipped: missing CONTAINER_NAME_{client_code.upper()}")
+        return []
 
-    cc = normalize_country_code(country_code)
-    csv_blob = f"{PROCESSED_CSV_PREFIX}/{cc}_amazon_shipping_queue.csv"
-    pq_blob = f"{PROCESSED_PARQUET_PREFIX}/{cc}_amazon_shipping_queue.parquet"
-
-    upload_df = dataframe_with_client_id(df)
+    stem = country_output_stem(country_code)
+    csv_blob = f"{AZURE_BLOB_FOLDER}/{stem}.csv"
+    pq_blob = f"{AZURE_BLOB_FOLDER}/{stem}.parquet"
+    upload_df = dataframe_with_client_id(df, client_code)
 
     bsc = BlobServiceClient.from_connection_string(conn)
-    raw_client = bsc.get_container_client(raw_container)
+    container_client = bsc.get_container_client(container)
+    uploaded: list[str] = []
 
-    csv_buffer = io.StringIO()
-    upload_df.to_csv(csv_buffer, index=False)
-    raw_client.get_blob_client(csv_blob).upload_blob(
-        csv_buffer.getvalue().encode("utf-8"),
-        overwrite=True,
-        content_settings=ContentSettings(content_type="text/csv"),
-    )
-    print(f"[upload] CSV  -> {raw_container}/{csv_blob}")
+    # Prefer uploading the just-saved local files when present
+    if csv_path is not None and Path(csv_path).is_file():
+        with Path(csv_path).open("rb") as fh:
+            container_client.get_blob_client(csv_blob).upload_blob(
+                fh,
+                overwrite=True,
+                content_settings=ContentSettings(content_type="text/csv"),
+            )
+    else:
+        csv_buffer = io.StringIO()
+        upload_df.to_csv(csv_buffer, index=False)
+        container_client.get_blob_client(csv_blob).upload_blob(
+            csv_buffer.getvalue().encode("utf-8"),
+            overwrite=True,
+            content_settings=ContentSettings(content_type="text/csv"),
+        )
+    uploaded.append(f"{container}/{csv_blob}")
+    print(f"[upload] CSV  -> {container}/{csv_blob}")
 
-    pq_buffer = io.BytesIO()
-    upload_df.to_parquet(pq_buffer, index=False, engine="pyarrow")
-    pq_buffer.seek(0)
-    raw_client.get_blob_client(pq_blob).upload_blob(
-        pq_buffer,
-        overwrite=True,
-        content_settings=ContentSettings(content_type="application/octet-stream"),
-    )
-    print(f"[upload] Parquet -> {raw_container}/{pq_blob}")
+    if parquet_path is not None and Path(parquet_path).is_file():
+        with Path(parquet_path).open("rb") as fh:
+            container_client.get_blob_client(pq_blob).upload_blob(
+                fh,
+                overwrite=True,
+                content_settings=ContentSettings(content_type="application/octet-stream"),
+            )
+    else:
+        pq_buffer = io.BytesIO()
+        upload_df.to_parquet(pq_buffer, index=False, engine="pyarrow")
+        pq_buffer.seek(0)
+        container_client.get_blob_client(pq_blob).upload_blob(
+            pq_buffer,
+            overwrite=True,
+            content_settings=ContentSettings(content_type="application/octet-stream"),
+        )
+    uploaded.append(f"{container}/{pq_blob}")
+    print(f"[upload] Parquet -> {container}/{pq_blob}")
+
+    return uploaded
 
 
 # =============================================================================
@@ -629,26 +648,25 @@ def process_country(
     output_folder: str,
     *,
     day: date | datetime | None = None,
-    lookback_days: int = 7,
+    lookback_days: int = 40,
     upload_to_azure: bool = True,
 ) -> str:
     """Download → map SKUs → clean → save local → optional Azure upload."""
     cc = normalize_country_code(geo["country_code"])
     prefix = f"[{cc}]"
 
-    print(f"\n{'=' * 60}\nShipping Queue — {cc} — START\n{'=' * 60}")
+    print(f"\n{'=' * 60}\nShipping Queue - {cc} - START\n{'=' * 60}")
 
-    print(f"\n>>> STEP: [{cc}] load COGS / SKU mapping")
+    print(f"\n>>> STEP: [{cc}] load COGS / SKU mapping (esh_sku_cleaning)")
     try:
-        product_cat = load_cogs_from_azure(cc)
+        sku_mapping = load_sku_mapping_for_country(cc)
+        print(f"{prefix} SKU mapping entries: {len(sku_mapping):,}")
     except FileNotFoundError as exc:
         print(f"{prefix} {exc}")
         return ""
     except Exception as exc:
-        print(f"{prefix} COGS download failed: {exc}")
+        print(f"{prefix} COGS / SKU mapping failed: {exc}")
         return ""
-    convertor = product_cat.loc[:, ["SKU", *COGS_ALIAS_COLS]].drop_duplicates()
-    sku_mapping = build_sku_mapping(convertor)
 
     print(f"\n>>> STEP: [{cc}] download raw shipping queue")
     try:
@@ -667,28 +685,38 @@ def process_country(
     print(f"\n>>> STEP: [{cc}] clean / map SKUs / discrepancy")
     out_df = process_shipping_queue(raw, sku_mapping=sku_mapping)
     if out_df.empty:
-        print(f"{prefix} No rows after processing.")
+        print(f"{prefix} No rows after processing (nothing to save/upload).")
         return ""
 
     out_df["country"] = cc
+    out_df["country_code"] = cc.upper()
 
-    print(f"\n>>> STEP: [{cc}] save local CSV")
-    os.makedirs(output_folder, exist_ok=True)
-    local_path = os.path.join(
-        output_folder,
-        f"ESH-{cc}-Amazon_Shipping_Queue_azure.csv",
+    print(f"\n>>> STEP: [{cc}] save local CSV + parquet")
+    final_df, csv_path, pq_path = save_local_outputs(
+        out_df, cc, Path(output_folder), client_code=CLIENT
     )
-    final_df = save_local_csv(out_df, local_path)
-    print(f"{prefix} Local CSV ({len(final_df)} rows): {local_path}")
+    local_path = str(csv_path)
 
     if upload_to_azure:
-        print(f"\n>>> STEP: [{cc}] upload processed CSV/Parquet to Azure")
+        print(
+            f"\n>>> STEP: [{cc}] upload CSV + parquet -> "
+            f"CONTAINER_NAME_{CLIENT}/{AZURE_BLOB_FOLDER}/"
+            f"{country_output_stem(cc)}.{{csv,parquet}}"
+        )
         try:
-            upload_processed_to_azure(final_df, cc)
+            uploaded = upload_outputs_to_azure(
+                final_df,
+                cc,
+                csv_path=csv_path,
+                parquet_path=pq_path,
+                client_code=CLIENT,
+            )
+            if not uploaded:
+                print(f"{prefix} Azure upload produced no blobs (check CONTAINER_NAME_{CLIENT}).")
         except Exception as exc:
             print(f"{prefix} Azure upload skipped: {type(exc).__name__}: {exc}")
 
-    print(f"{'=' * 60}\nShipping Queue — {cc} — DONE\n{'=' * 60}")
+    print(f"{'=' * 60}\nShipping Queue - {cc} - DONE\n{'=' * 60}")
     return local_path
 
 
@@ -714,7 +742,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     p.add_argument(
         "--lookback-days",
         type=int,
-        default=7,
+        default=40,
         help="Days to search backward for the latest raw shipping queue blob.",
     )
     p.add_argument(
@@ -739,52 +767,30 @@ def _run_with_args(args: argparse.Namespace) -> list[str]:
     load_dotenv(args.env_file)
 
     print(f"\n>>> STEP: setup ESH shipping queue (client={CLIENT})")
-    global PROCESSED_ROOT, DEFAULT_OUTPUT_FOLDER
-    PROCESSED_ROOT = _clean_env(os.getenv("PROCESSED_ROOT", PROCESSED_ROOT))
-    default_out = os.path.join(PROCESSED_ROOT, "shipping_queue")
+    default_out = str(output_dir_for(CLIENT))
     if not args.output_folder or args.output_folder == DEFAULT_OUTPUT_FOLDER:
-        DEFAULT_OUTPUT_FOLDER = default_out
         output_folder = default_out
     else:
         output_folder = args.output_folder
-
-    print("\n>>> STEP: load geographies from .env")
-    geographies = load_geographies_from_env()
-    if not geographies:
-        print("No cogs_sheet_* entries in .env — cannot resolve countries.")
-        return []
 
     day: date | None = None
     if args.day:
         day = datetime.strptime(str(args.day).strip(), "%Y-%m-%d").date()
 
-    requested = [c.strip().lower() for c in str(args.countries).split(",") if c.strip()]
-    if not requested or "all" in requested:
-        selected = sorted(geographies.keys())
-    else:
-        selected = []
-        unknown = []
-        for raw in requested:
-            try:
-                code = normalize_country_code(raw)
-            except ValueError:
-                unknown.append(raw)
-                continue
-            if code in geographies:
-                selected.append(code)
-            else:
-                unknown.append(raw)
-        if unknown:
-            print(f"Unknown countries skipped: {', '.join(unknown)}")
-
+    requested = [c.strip() for c in str(args.countries).split(",") if c.strip()]
+    print("\n>>> STEP: resolve geographies (pipeline/CLI -> geography.yaml)")
+    geographies = resolve_geographies(requested or None, client_code=CLIENT)
+    selected = sorted(geographies.keys())
     if not selected:
         print("No valid countries selected.")
         return []
 
-    print(f"Countries: {', '.join(selected)}")
+    print(f"Countries: {', '.join(cc.upper() for cc in selected)}")
     print(f"Local output folder: {output_folder}")
-    print(f"Azure processed CSV prefix:    {PROCESSED_CSV_PREFIX}/")
-    print(f"Azure processed Parquet prefix: {PROCESSED_PARQUET_PREFIX}/")
+    print(
+        f"Azure upload: CONTAINER_NAME_{CLIENT}/{AZURE_BLOB_FOLDER}/"
+        f"{{COUNTRY_CODE}}_{NAME_SUFFIX}.csv|.parquet"
+    )
 
     print("\n>>> STEP: process selected countries")
     finished: list[str] = []
@@ -810,7 +816,7 @@ def run(
     geos: Optional[Sequence[str]] = None,
     countries: Optional[str] = None,
     output_folder: Optional[str] = None,
-    lookback_days: int = 7,
+    lookback_days: int = 40,
     day: Optional[str] = None,
     no_azure_upload: bool = False,
     env_file: str = ".env",

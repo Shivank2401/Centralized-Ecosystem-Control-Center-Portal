@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 import traceback
 from typing import Any, Callable, List, Optional, Sequence
 
@@ -67,7 +68,16 @@ class PipelineExecutor:
             return ReportResult(status="skipped", message="no module wired")
         short_name = module_path.rsplit(".", 1)[-1]
         try:
-            mod = importlib.import_module(module_path)
+            # Reload so interactive CLI / long-lived workers pick up script edits
+            # without requiring a full process restart. Also refresh layouts/paths
+            # when already imported (report scripts often bind those helpers).
+            for dep in ("config_manager.paths", "config_manager.layouts"):
+                if dep in sys.modules:
+                    importlib.reload(sys.modules[dep])
+            if module_path in sys.modules:
+                mod = importlib.reload(sys.modules[module_path])
+            else:
+                mod = importlib.import_module(module_path)
         except ModuleNotFoundError as exc:
             self._log(f"  [skip] cannot import {module_path}: {exc}")
             return ReportResult(status="skipped", message=str(exc))

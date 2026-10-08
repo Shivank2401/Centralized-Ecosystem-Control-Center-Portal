@@ -1,0 +1,1544 @@
+# Return directory — Amazon FBA customer returns taxonomy
+# Manage Amazon reason-code mapping + customer-comment grouping here.
+# Future return_database.py should load this file (no hardcoded maps).
+#
+# Matching order for customer-comments:
+#   1. clean text (HTML unescape, unicode normalize, whitespace collapse)
+#   2. exact alias match (normalized) under customer_comment_groups.*.aliases
+#   3. structured Amazon prefix before first '|' (structured_comment_prefixes)
+#   4. keyword regexes (first match wins; group order below)
+#   5. else -> Unmapped (+ alert when alerts.on_unknown_comment is true)
+#
+# Matching for reason column:
+#   lookup return_reason_mapping; unknown -> alerts.unknown_reason_group + alert
+
+version: 1
+
+alerts:
+  enabled: true
+  on_unknown_reason: true
+  on_unknown_comment: true
+  unknown_reason_group: Unmapped Reason
+  unknown_comment_group: Unmapped
+  collect_unknowns: true
+  # Suggested log lines when wiring the report:
+  #   ALERT unknown return reason: <REASON_CODE>
+  #   ALERT unknown customer comment: <cleaned text>
+
+cleaning:
+  html_unescape: true
+  unicode_normalize: NFKC
+  collapse_whitespace: true
+  treat_as_empty:
+    - ""
+    - nan
+    - none
+    - null
+    - n/a
+    - na
+
+# Amazon `reason` codes from FBA customer returns -> business group
+return_reason_mapping:
+  DEFECTIVE: Product Quality / Defective
+  DAMAGED_BY_FC: Damaged
+  NOT_AS_DESCRIBED: Product Issue
+  APPAREL_TOO_LARGE: Size / Fit Issue
+  APPAREL_TOO_SMALL: Size / Fit Issue
+  POOR_FIT: Size / Fit Issue
+  ORDERED_WRONG_ITEM: Customer Ordered Wrong Item
+  MISSED_ESTIMATED_DELIVERY: Delivery Issue
+  UNDELIVERABLE_UNKNOWN: Delivery Issue
+  UNAUTHORIZED_PURCHASE: Customer Changed Mind
+  NOT_COMPATIBLE: Product Issue
+  DAMAGED_BY_CARRIER: Damaged
+  QUALITY_UNACCEPTABLE: Product Quality / Defective
+  NO_REASON_GIVEN: No Reason Provided
+  NEVER_ARRIVED: Delivery Issue
+  SWITCHEROO: Wrong / Different Item
+  FOUND_BETTER_PRICE: Customer Changed Mind
+  MISSING_PARTS: Missing Parts / Incomplete
+  UNDELIVERABLE_REFUSED: Delivery Issue
+  EXTRA_ITEM: Wrong / Different Item
+  MISORDERED: Customer Ordered Wrong Item
+  UNDELIVERABLE_CARRIER_MISS_SORTED: Delivery Issue
+  WRONG_SIZE: Size / Fit Issue
+  UNDELIVERABLE_UNCLAIMED: Delivery Issue
+  UNWANTED_ITEM: Customer Changed Mind
+
+structured_comment_prefixes:
+  Incorrect Size: wrong_size_ordered
+  Not as Expected: not_as_expected
+  Changed Mind: no_longer_needed_changed_mind
+  Delivery Issue: delivery_late
+  Damaged: damaged_packaging_or_product
+  Defective: defective_quality
+  Ordering Issue: accidental_unauthorized_purchase
+  Received Wrong Item: wrong_item_received
+
+customer_comment_groups:
+  size_too_small:
+    label: Size Too Small
+    description: "Item smaller than needed or expected; usable area too small."
+    keywords:
+      - 'usable (area|surface).*(small|less)'
+      - 'eating area.*(small|less)'
+      - 'surface area.*(small|less)'
+      - 'actual size.*small'
+      - 'plate(s)? (is |are |were )?tiny'
+      - 'bowl(s)? (is |are |were )?tiny'
+      - 'snall'
+      - 'smal$'
+      - 'smaill'
+      - 'tooooo small'
+      - 'waaaay too small'
+      - 'wayyyyyy too small'
+      - 'ridiculously tiny'
+      - 'not dinner'
+      - 'dessert size'
+      - 'saucer'
+      - 'for kids'
+      - 'need(ed)? (a )?(bigger|larger|10|9|8)'
+      - 'order(ed|ing)? (a )?(bigger|larger)'
+      - 'will (buy|order|reorder|purchase).*(bigger|larger|8|9|10)'
+      - 'too small for'
+      - 'small for (what|my|our|soup|dinner|party|event|pizza)'
+      - 'not (big|large) enough'
+      - 'barely (big|large) enough'
+      - 'won.?t (fit|hold|work)'
+      - 'cannot (fit|hold|use)'
+      - 'can.?t (fit|hold|use)'
+      - 'hold less'
+      - 'too shallow'
+      - 'not deep'
+      - 'depth.*(not|too|less)'
+      - 'too small'
+      - 'to small'
+      - 'way too small'
+      - 'much too small'
+      - 'smaller than'
+      - '\btiny\b'
+      - '\bteeny\b'
+      - 'muy peque'
+      - 'trop petit'
+      - 'need(ed)? (a )?bigg'
+      - 'need(ed)? larger'
+      - 'want(ed)? larger'
+      - 'need(ed)? bigger'
+      - 'not big enough'
+      - 'not large enough'
+      - 'too narrow'
+      - 'dessert plate'
+      - '\bminis?\b'
+      - 'size is too small'
+      - 'plates? (are |were )?too small'
+      - 'bowls? (are |were )?too small'
+    aliases:
+      - "Smal"
+      - "Tiny"
+      - "2 snall"
+      - "cant use"
+      - "to small"
+      - "Too smal"
+      - "Can't use"
+      - "to small."
+      - "TOO SMALL"
+      - "Too snall"
+      - "Too small."
+      - "Too smallp"
+      - "Too smalls"
+      - "Trop petit"
+      - "too small for soup bowls"
+      - "too small, needed larger"
+      - "Way too small and flimsy"
+      - "Bought the size too small"
+      - "bowls too small for event"
+      - "It was too small diameter"
+      - "Looking for dessert plate"
+      - "Need to order larger size"
+      - "Plates were way too small"
+      - "Product too small for use"
+      - "sent 7oz bowls. Too small"
+      - "the bowls are too shallow"
+      - "The plates are too small."
+      - "The plates were too small"
+      - "These bowls are too small"
+      - "To small for what I need."
+      - "too shallow to eat out of"
+      - "Too small for my purposes"
+      - "Too small for our purpose"
+      - "too small for what i need"
+      - "Size is too small"
+      - "Incorrect Size|Too small|No"
+      - "Plates were too small for food being served"
+      - "Hello, the bowls aren't like what the picture looks like. I can't use them for an event unfortunately."
+      - "the bowls are tiny and couldn't possibly fit 8 oz of soup"
+      - "It is smaller than expected. I will be ordering a bigger size"
+      - "Incorrect Size|Too small for servings|No"
+      - "Incorrect Size|Compartments were too small|No"
+      - "Item is too small for what I meeded"
+
+  size_too_large:
+    label: Size Too Large
+    description: "Item larger, deeper, or bulkier than needed."
+    keywords:
+      - 'too (large|big|deep|bulky|tall|wide|thick) for'
+      - 'larger than (i |we |expected|needed|wanted|described|thought)'
+      - 'bigger than (i |we |expected|needed|wanted|described|thought)'
+      - 'need(ed)? (a )?smaller'
+      - 'want(ed)? (a )?smaller'
+      - 'order(ed|ing)? smaller'
+      - 'will (buy|order).*(smaller)'
+      - 'way too (big|large|bulky)'
+      - 'much too (big|large)'
+      - 'is too big'
+      - 'are too big'
+      - 'were too (big|large)'
+      - 'too bog'
+      - 'toolarge'
+      - 'grandeur'
+      - 'trop grand'
+      - 'too (large|big)'
+      - 'to big'
+      - 'larger than'
+      - 'bigger than'
+      - 'too deep'
+      - 'too bulky'
+      - 'trop gros'
+      - 'need(ed)? smaller'
+      - 'want(ed)? smaller'
+      - 'too large for'
+      - 'way too big'
+      - 'much too large'
+    aliases:
+      - "To big"
+      - "Too big"
+      - "Too bog"
+      - "Grandeur"
+      - "Toolarge"
+      - "Too Large"
+      - "IS TOO BIG"
+      - "Too bulky."
+      - "Too large."
+      - "Trop grand"
+      - "cups too big"
+      - "Need smaller"
+      - "Size too big"
+      - "Looks too big"
+      - "To big plates"
+      - "too big order"
+      - "Cups too large"
+      - "It was too big"
+      - "Item too large"
+      - "Plates too big"
+      - "Too big for me"
+      - "plates were too large"
+      - "Too deep for my needs"
+      - "Bigger than I thought."
+      - "Incorrect Size|too big"
+      - "Looks too big for 32oz"
+      - "Needed smaller cersion"
+      - "The bowls are too deep"
+      - "Much bigger than needed"
+      - "Too thick for my needs."
+      - "don't need and too large"
+      - "Les bols sont trop gros."
+      - "To big for what I needed"
+      - "Bigger than my place mats"
+      - "Incorrect Size|Too big|No"
+      - "Much bigger than expected"
+      - "Plates are really too big"
+      - "These cups are too large!"
+      - "Too big for my cup holder"
+      - "Was bigger than it seemed"
+      - "Incorrect Size|To big|Small"
+
+  wrong_size_ordered:
+    label: Wrong Size Ordered
+    description: "Customer ordered wrong size/variant without clear small/large signal."
+    keywords:
+      - 'wrong size'
+      - 'incorrect size'
+      - 'incorrect sizing'
+      - 'size (was )?wrong'
+      - 'ordered (the )?(wrong|incorrect) size'
+      - 'bought (the )?(wrong|incorrect) size'
+      - 'purchased (the )?(wrong|incorrect) size'
+      - 'selected (the )?wrong'
+      - 'clicked (the )?wrong'
+      - 'meant to (buy|get|order|purchase)'
+      - 'i thought i (ordered|bought|purchased|clicked)'
+      - 'misread|misjudge|misunderstood|mistaken|miscalculated'
+      - 'accidental(ly)? (ordered|bought|purchased).*size'
+      - 'need(ed)? (a )?different size'
+      - 'different size needed'
+      - 'size not (right|correct|compatible|suitable|what)'
+      - 'not the (right|correct) size'
+      - 'improperly sized'
+      - 'incorrectly sized'
+      - 'sizing (off|is off|inaccurate|doesn)'
+      - 'dimensions?( do)? not'
+      - 'measure(ment)?s? (incorrect|wrong|off|do not|don.?t)'
+      - 'described as .* actually'
+      - 'says? .* but (is|are|received|got)'
+      - 'label say'
+      - '8\" plates sent'
+      - '10\" plates sent'
+      - '6\" plates sent'
+      - '9\" (plates? )?(sent|received|got)'
+      - 'received \d'
+      - 'got \d+\"'
+      - 'sent \d+\"'
+      - 'ordered \d+.*(received|got|sent)'
+      - 'i ordered \d+'
+      - 'need(ed)? \d+\"'
+      - 'want(ed)? \d+\"'
+      - 'meant .* \d+'
+      - 'ordered (the )?wrong'
+      - 'bought (the )?wrong'
+      - 'purchase(d)? wrong'
+      - 'misread|misjudge|misunderstood|mistaken'
+      - 'selected the wrong'
+      - 'need(ed)? (the )?other size'
+      - 'wrong soze|wrong sizw|wrong sixe'
+      - 'size (error|issue|not right|not correct)'
+    aliases:
+      - "Size error"
+      - "Size issue"
+      - "sizing off"
+      - "Wrong sixe"
+      - "Wrong sizw"
+      - "Wrong soze"
+      - "Incorrect Size"
+      - "Need other size"
+      - "Bought wrong one"
+      - "Improperly sized"
+      - "Incorrect sizing"
+      - "Incorrect Size|No"
+      - "Incorrectly sized"
+      - "Meant to get aloe"
+      - "Sizing inaccurate"
+      - "Mistaken purchase."
+      - "not the right size"
+      - "Received 6\" plates"
+      - "Meant to buy 10inch"
+      - "need different size"
+      - "only meant to buy 1"
+      - "sizing doesn't work"
+      - "Incorrect Size|small"
+      - "I only meant to order 1 box."
+      - "I didn't realize I ordered 2!"
+      - "I meant to buy dinner plates."
+      - "I meant to get a bigger size."
+      - "I meant to get a larger size."
+      - "I meant to get ones with lids"
+      - "I ordered the incorrect size."
+      - "Meant to buy 10\" round plates"
+      - "Meant to buy plates not bowls"
+      - "Meant to get larger quantity."
+      - "Meant to order 1 package only"
+      - "meant to order different size"
+      - "Meant to purchase larger size"
+      - "Incorrect Size|Small size|None"
+      - "i meant to get the larger plate"
+      - "I meant to order the 6\" plates."
+      - "I ordered 100 and only 25 came."
+
+  not_as_expected:
+    label: Not As Expected
+    description: "Look, material, color, description, or photos mismatched expectations."
+    keywords:
+      - 'not as (expected|described|pictured|shown|advertised|promised)'
+      - 'not what (i |we )?(expected|wanted|thought|ordered|pictured)'
+      - 'nothing like (the )?(picture|photo|image|website|ad)'
+      - 'look(s|ed)? (different|weird|nothing like|fake|cheap)'
+      - 'picture|photo|image|website|listing|description|advertis'
+      - 'misleading|inaccurate|deceiv|miss.?market'
+      - 'thought (it|they|these|this) (was|were|would|came)'
+      - 'expected (it|them|these|larger|smaller|different)'
+      - 'material|texture|finish|colour|color|style|shape|design'
+      - 'rustic|ugly|tacky|shabby|unattractive|unappealing'
+      - 'not white|not bamboo|not palm|not plastic|not paper'
+      - 'different (than|from|to) (what|the|picture|photo|image)'
+      - 'does not (look|match|resemble)'
+      - 'doesn.?t (look|match|resemble)'
+      - 'far from what'
+      - 'not the (style|type|material|color|colour|product)'
+      - 'product (is )?different'
+      - 'appeared larger|looked bigger|looked larger|photos? lead'
+      - 'not as expected'
+      - 'not what i (expected|wanted|thought|ordered)'
+      - 'doesn.?t look'
+      - 'look(ed|s)? different'
+      - '\bpicture\b'
+      - '\bphoto\b'
+      - '\bwebsite\b'
+      - '\bdescription\b'
+      - 'advertis'
+      - 'not as (pictured|described|shown|advertised)'
+      - 'misleading'
+      - 'inaccurate'
+      - 'thought (it|they) (was|were|would)'
+      - '\bmaterial\b'
+      - '\bcolor\b|\bcolour\b'
+      - '\btexture\b'
+      - 'look(ed)? weird'
+      - '\bugly\b'
+      - 'cheap looking'
+      - '\brustic\b'
+      - 'not white'
+      - 'nothing like (the )?(picture|photo|image)'
+      - 'not the (style|type|material|color|colour)'
+    aliases:
+      - "ugly"
+      - "shape"
+      - "Textured"
+      - "color off"
+      - "Not white"
+      - "Dark color"
+      - "Inaccurate"
+      - "too rustic"
+      - "color issue"
+      - "wrong style"
+      - "Looked tacky"
+      - "Weird shaped"
+      - "Wrong material"
+      - "Not as Expected"
+      - "Not as pictured"
+      - "Not white color"
+      - "Don't like style"
+      - "Not as described"
+      - "Not as expected."
+      - "Not as pictured."
+      - "Not white enough"
+      - "Not as Expected|changed needs|no"
+      - "Not as Expected|Cheapy flimsy|No"
+      - "Not as Expected|Quality issue|No"
+      - "Not as Expected|Too small for|No"
+      - "Not as Expected|Way too small|No"
+      - "These plates are not as pictured"
+      - "Thought these were dinner plates"
+      - "Thought they were bigger plate s"
+      - "Color and quality inconsistencies"
+      - "didnt like the colour and texture"
+      - "Not as Expected|size|too small|no"
+      - "picture didn't look the true size"
+      - "they appear larger on the website"
+      - "Thought they were the bigger size"
+      - "Bowls appeared larger on computer."
+      - "Came one day later than advertised"
+      - "i thought it was next day delivery"
+      - "I thought they were the big plates"
+      - "It doesn't look like the pictures."
+      - "Not as Expected|Shape different than expected and these can't be used for hot food|The product description didn't highlight the mismatched sizing doesn't detail that they can't be used for warm food"
+      - "Thought it was a small PLATE and it was a small BOWL."
+      - "Not as Expected|not upto the mark|need big siz plate"
+      - "Not as Expected|Picture on the website is different from what I got . Picture looks like bigger plates but small plate came"
+      - "Not as Expected|Material|N/a"
+      - "Looks different from what is on the website. It's crooked."
+      - "Not as Expected|Smaller|No"
+      - "Not as Expected|Size|Smaller than I anticipated|No"
+
+  defective_quality:
+    label: Defective / Poor Quality
+    description: "Flimsy, leaking, brittle, rough, or otherwise poor product quality."
+    keywords:
+      - 'fell apart'
+      - 'fall apart'
+      - 'glue'
+      - 'leak'
+      - 'flimsy'
+      - 'fragile'
+      - 'brittle'
+      - 'not sturdy'
+      - 'not durable'
+      - 'not strong'
+      - 'too thin'
+      - 'paper thin'
+      - 'cheap(ly)? (made|looking|quality)'
+      - 'poor(ly)? (made|quality|construct)'
+      - 'bad quality'
+      - 'horrible quality'
+      - 'terrible quality'
+      - 'low quality'
+      - 'subpar|sub-par'
+      - 'doesn.?t work|didn.?t work|does not work|will not work|won.?t work'
+      - 'defective|defect\b'
+      - 'unusable|useless'
+      - 'not heavy duty'
+      - 'soggy'
+      - 'absorb'
+      - 'not waterproof'
+      - 'not leak'
+      - 'unstable'
+      - 'topple'
+      - 'rough (edge|surface|looking|texture)'
+      - 'uneven'
+      - 'inconsistent'
+      - 'quality (not|issue|unacceptable|inadequate|poor|bad)'
+      - 'not (the )?quality'
+      - 'looks? cheap'
+      - 'feel(s)? cheap'
+      - '^defective\|'
+      - '\bdefective\b'
+      - 'poor quality'
+      - 'cheap quality'
+      - '\bflimsy\b'
+      - '\bleak'
+      - '\bbrittle\b'
+      - '\bsplinter'
+      - 'rough edge'
+      - 'doesn.?t work'
+      - 'didn.?t work'
+      - 'falling apart'
+      - 'disintegrat'
+      - 'quality (issue|not|unacceptable)'
+    aliases:
+      - "defect"
+      - "flimsy"
+      - "Leaked"
+      - "Flimsy."
+      - "Too thin"
+      - "defective"
+      - "Too thin."
+      - "not strong"
+      - "Not sturdy"
+      - "to fragile"
+      - "Too flimsy"
+      - "bad quality"
+      - "Didn't work"
+      - "Doesnt work"
+      - "Looks cheap"
+      - "Low quality"
+      - "Not quality"
+      - "Too fragile"
+      - "Very flimsy"
+      - "The forks are too flimsy"
+      - "Cups leak from the bottom"
+      - "Defective|Moldy|Poor make"
+      - "Does not work / defective"
+      - "Doesn't work for my event"
+      - "plates are disintegrating"
+      - "Poor quality and bad odor"
+      - "Doesn't work in my kitchen"
+      - "item defective dosent work"
+      - "liquid leaks out of bottom"
+      - "No heavy duty very fragile"
+      - "Too flimsy. Not waterproof"
+      - "Defective|Straws are broken"
+      - "not sturdy enough for gumbo"
+      - "Quality not what I expected"
+      - "Bowls leak and are defective"
+      - "Defective|Bad chemical smell"
+      - "Defective|Cracked and warped"
+      - "Es demasiado fragile el vaso"
+      - "Defective|they are oddly shaped and rough at the edges and not like other ones I have purchased. they are misshapen and not usable very poor quality"
+
+  damaged_packaging_or_product:
+    label: Damaged Packaging / Product
+    description: "Bent, cracked, broken, open packaging, or warped on arrival."
+    keywords:
+      - '\bcrack'
+      - '\bchip'
+      - '\bbroken\b'
+      - '\bbent\b'
+      - '\bwarped\b'
+      - '\bsplit'
+      - '\btorn\b'
+      - '\bripped\b'
+      - '\bcrush'
+      - '\bshatter'
+      - '\bsplinter'
+      - '\bpeel'
+      - 'open(ed)? (package|packaging|plastic|bag|box|wrap)'
+      - '(package|packaging|plastic|bag|wrap).*(open|torn|ripped|damaged|hole)'
+      - 'not sealed'
+      - 'unsealed'
+      - 'exposed'
+      - 'misshapen|deformed|distorted|uneven|wonky|wobbly'
+      - 'do not (sit|lay|lie) flat'
+      - 'don.?t (sit|lay|lie) flat'
+      - 'not flat'
+      - 'falling apart'
+      - 'came (open|broken|damaged)'
+      - 'arrived (open|broken|damaged)'
+      - 'half gone'
+      - 'missing (a |one |some )?plate'
+      - '^damaged\|'
+      - '\bdamaged\b'
+      - '\bsmash'
+      - 'packag.*(open|torn|ripped|damaged)'
+      - 'plastic.*(torn|open|ripped)'
+      - 'misshapen'
+      - 'open(ed)? package'
+    aliases:
+      - "Bent"
+      - "broken"
+      - "uneven"
+      - "Warped"
+      - "cracked"
+      - "damaged"
+      - "smashed"
+      - "Item torn"
+      - "Box damaged"
+      - "Broken cups"
+      - "Item broken"
+      - "Mold broken"
+      - "Broken bowls"
+      - "Broken items"
+      - "broken plate"
+      - "damaged item"
+      - "It splinters"
+      - "Item damaged"
+      - "Unopened box"
+      - "Bowls chipped"
+      - "Broken pieces"
+      - "Broken Plates"
+      - "Some of the bowls came broken."
+      - "Some plates are broken damaged"
+      - "The plates are bent and wonky."
+      - "Damaged|No|Cracked and wrinkled"
+      - "Damaged|No|the plastic was torn"
+      - "Plates smell like mold. Damaged"
+      - "Some of packaging was openeded."
+      - "Some of the plates are cracked."
+      - "Some of the plates were damaged"
+      - "Bamboo bowls had cracks in them."
+      - "boxed is pierced and seal broken"
+      - "Package torn, and no longer need"
+      - "Package unopened and item unused"
+      - "Plates are all bent out of shape"
+      - "Several plates are falling apart"
+      - "Some of the product was splinter"
+      - "The plates are bent and not flat"
+      - "Too many plates had broken edges"
+      - "Paper plate open package a chuck of the plates bended"
+
+  smell_mold_dirty:
+    label: Smell / Mold / Dirty
+    description: "Odor, mold/mildew, stains, dirt, bugs, unsanitary appearance."
+    keywords:
+      - 'smell|odou?r|stink|rancid|funky|manure|vomit|chemical smell'
+      - 'mold|mould|mildew|fungus'
+      - 'dirty|dust|stain|discolor|discolour|spotted|spotty'
+      - 'unsanitary|unhygienic|hygiene|used before|look(s|ed)? used'
+      - 'bug|insect|spider|ant'
+      - 'gross|disgusting|nasty|feces|poop'
+      - 'residue|debris|sandy|gritty|dusty'
+      - 'black (spot|mark|stain|mold)'
+      - 'not (clean|food.?safe|appetizing|hygienic)'
+      - 'look(s|ed)? (dirty|moldy|gross|stained)'
+      - '\bsmell'
+      - '\bodou?r\b'
+      - '\bmold'
+      - '\bmould'
+      - '\bmildew'
+      - '\bdirty\b'
+      - '\bstain'
+      - '\bdiscolor'
+      - '\bunsanitary'
+      - '\bbugs?\b'
+      - '\binsect'
+      - '\bdust\b'
+      - '\bresidue\b'
+      - 'looks? (dirty|used|gross)'
+      - 'feces'
+      - 'vomit'
+      - 'stink'
+      - 'rancid'
+    aliases:
+      - "Mold"
+      - "odor"
+      - "Dirty"
+      - "Giant"
+      - "Moldy"
+      - "Smell"
+      - "Mildew"
+      - "Smells"
+      - "Smelly"
+      - "bad odor"
+      - "Go moldy"
+      - "has mold"
+      - "Want 12\""
+      - "bad smell"
+      - "MOLDED!!!"
+      - "Odd smell"
+      - "Products looks like mold"
+      - "Strong, unpleasant smell"
+      - "The product smells funny"
+      - "There is a strong smell."
+      - "Too gross to put food on"
+      - "with uncomfortable smell"
+      - "Arrived completely molded"
+      - "discolored and smells bad"
+      - "moldy and smells terribly"
+      - "Moldy stinky dirty plates"
+      - "Plates look gross / moldy"
+      - "there is dust in the bag."
+      - "They have a bizarre smell"
+      - "They're wet and smell bad"
+      - "want pure white not pearl"
+      - "Bowls smell like detergent"
+      - "Did not want scented wipes"
+      - "Mold on this order as well"
+      - "Plates are covered in mold"
+      - "Wanted bowls which I subsequently ordered"
+
+  delivery_late:
+    label: Delivery Late
+    description: "Arrived after needed date, event, or promised window."
+    keywords:
+      - 'days? to arrive'
+      - 'after date needed'
+      - 'after.*(needed|required)'
+      - 'l8te'
+      - 'latte$'
+      - 'latw$'
+      - 'too alow'
+      - 'too kate'
+      - 'too lte'
+      - 'too late'
+      - 'came late'
+      - 'came too late'
+      - 'showed up.*late'
+      - 'not (delivered|arriv).*(time|on time)'
+      - 'did not arrive.*(time|when|promised)'
+      - 'didn.?t arrive.*(time|when|promised)'
+      - 'not in time'
+      - 'past (the )?delivery'
+      - 'delivery (date|window|was|delayed)'
+      - 'prime missed'
+      - 'was delayed'
+      - 'shipping delay'
+      - 'arrive too late'
+      - 'arrived (a day|days|after|too)'
+      - 'received (too )?late'
+      - 'got (here|there) too late'
+      - 'needed (it |them )?(sooner|earlier|by)'
+      - 'needed for .*(but|and).*(late|after|didn)'
+      - 'event.*(over|passed|started).*(arriv|deliver)'
+      - 'party.*(over|passed|started|already).*(arriv|deliver)?'
+      - 'for (a )?(party|event|wedding|birthday).*(late|after|didn|arriv)'
+      - 'delivery issue'
+      - '\blate\b'
+      - 'arriv(ed|e|al).*(late|after)'
+      - '(late|after).*(arriv|deliver|party|event|wedding|birthday)'
+      - 'didn.?t (arriv|come|make it|get).*(time|party|event)'
+      - 'missed.*(deliver|party|event)'
+      - 'promised delivery'
+      - 'shipping.*(delay|late|took)'
+      - 'took too long'
+      - 'to late'
+      - '2 late'
+      - 'delayed'
+      - 'retard de livraison'
+      - 'llegada tarde'
+      - 'date d.?arriv'
+      - 'trop tard'
+    aliases:
+      - "late"
+      - "2 l8te"
+      - "2 late"
+      - "delayed"
+      - "To late"
+      - "Too alow"
+      - "Too Late"
+      - "Was late"
+      - "Came late"
+      - "Too late."
+      - "Trop tard"
+      - "a day late"
+      - "A week late"
+      - "Not in time"
+      - "Arrived late"
+      - "Arrived latw"
+      - "Came to late"
+      - "it came late"
+      - "late arrival"
+      - "Bought for event and didn't use"
+      - "Delivered late than we expected"
+      - "Delivery Issue|Item was late|No"
+      - "Didn't arrive in time for event"
+      - "Had enough plates for my event."
+      - "item received later than needed"
+      - "needed sooner than arrival date"
+      - "1 day late and no longer needed."
+      - "Arrived a day late, couldn't use"
+      - "Arrived over a week late!!!!!!!!"
+      - "Arrived the night after my event"
+      - "Bought for a party but didnt use"
+      - "Did not arrive in time for event"
+      - "didn't need it. arrived too late"
+      - "item arrived after I needed them"
+      - "Item arrived later than expected"
+      - "Item arrived too late to utilize"
+      - "Package Not opened, Arrived late"
+      - "They arrived after our big event"
+      - "Arrived after my event start date"
+      - "Delivery Issue|Item was late|Didn't make it in time for party"
+      - "Items arrived late, bought it from local store"
+
+  no_longer_needed_changed_mind:
+    label: No Longer Needed / Changed Mind
+    description: "Needs changed, unopened, already had, caterer supplied, etc."
+    keywords:
+      - 'changed? (my )?mind|change mind'
+      - 'no longer (need|needed|want|using|required)'
+      - 'not (needed|need|required|necessary)( anymore| any longer)?'
+      - 'don.?t need|do not need|didn.?t need|did not need|dont need'
+      - 'not needed|no need|noneed|not required anymore'
+      - 'my needs changed|needs changed'
+      - 'found (other|another|different|better) (item|product|option|plates?|bowls?|cups?)'
+      - 'decided (to |not |on |we |i )'
+      - 'went (with|another|a different)'
+      - 'using (real|reusable|different|other|something|china|glass)'
+      - 'caterer|someone else (provided|purchased|bought|brought|donated)'
+      - 'already (had|have|bought|purchased|ordered|owned|enough|plenty)'
+      - 'unopened|never (opened|used|even)|did not use|didn.?t use|not used|unused'
+      - 'plus besoin|no lo (necesito|quiero)|do not want|don.?t want'
+      - 'it.?s fine\? not needed|thanks? but not needed'
+      - 'just (did )?not need|ended up not (need|using|opening)'
+      - 'no longer (nee+|want)'
+      - 'will not be (using|needing)|won.?t (need|use)'
+      - 'backup|back up|just in case'
+      - 'have enough|had enough|had plenty|already have this'
+      - 'chose (another|a different|different)'
+      - 'prefer(red)? (other|another|different|metal|reusable)'
+      - 'don.?t like|do not like|didn.?t like|did not like|dont like'
+      - 'not (a )?fan'
+      - 'changing? mind'
+      - 'additional items bought by other'
+      - 'friend suggested|neighbor|sister (also |had )?bought|husband and i ordered'
+      - 'venue (provided|supplied|changed)'
+      - 'hostess already|coworker had already'
+      - 'changed mind'
+      - 'change my mind'
+      - 'changed my mind'
+      - 'no longer need'
+      - 'not (needed|need|required)'
+      - 'don.?t need'
+      - 'do not need'
+      - 'didn.?t need'
+      - 'did not need'
+      - 'not needed'
+      - '\bunwanted\b'
+      - 'my needs changed'
+      - 'found other item'
+      - 'decided (to |not |on )'
+      - 'went with'
+      - 'using (real|reusable|different|other|something)'
+      - '\bcaterer\b'
+      - 'someone else (provided|purchased|bought|brought)'
+      - 'already (had|have|bought|purchased|ordered)'
+      - '\bunopened\b'
+      - 'never (opened|used|even)'
+      - 'did not use'
+      - 'didn.?t use'
+      - 'not used'
+      - 'plus besoin'
+      - 'no lo necesito'
+      - 'do not want'
+      - 'don.?t want'
+      - 'no longer (want|needed|needrd|neeeded|neees|nees)'
+      - 'it.?s fine\? not needed'
+      - 'not needed anymore'
+      - 'dont need'
+    aliases:
+      - "Unused"
+      - "Caterer"
+      - "no need"
+      - "Not need"
+      - "not used"
+      - "Unopened"
+      - "Didnt use"
+      - "Dont need"
+      - "no needed"
+      - "Didn't use"
+      - "Didnt need"
+      - "Don't like"
+      - "Don't need"
+      - "No longer needed them"
+      - "Not needed in the end"
+      - "not opened not needed"
+      - "thanks but not needed"
+      - "Unopened and unneeded"
+      - "We have enough plates"
+      - "already have this item"
+      - "Decided not to use it."
+      - "Did not need after all"
+      - "did not need all three"
+      - "Did not need for event"
+      - "Did not need that many"
+      - "Did not use this item."
+      - "Didn't like the bowls."
+      - "Didn't need after all."
+      - "Didn't need it anymore"
+      - "Didn't need this many."
+      - "Didn't need up needing"
+      - "DO not need it anymore"
+      - "Don't like the quality"
+      - "It's fine? Not needed"
+      - "Changed Mind|My needs changed"
+      - "My boss went with a different decor for our event"
+      - "Bought as back up didnt need"
+      - "No longer needed"
+      - "Not needed"
+      - "Did not use"
+      - "No longer need"
+      - "Changed my mind"
+      - "Changed Mind|Not as Expected|I thought they were bigger"
+      - "Didn't need for an event"
+      - "Changed Mind|Item is damaged|No|The plastic packaging inside was open"
+
+  ordered_too_many_or_duplicate:
+    label: Ordered Too Many / Duplicate
+    description: "Over-ordered quantity or duplicate purchase."
+    keywords:
+      - 'too many'
+      - 'too much'
+      - 'ordered (too |extra |2 |two |multiple |more )'
+      - 'bought (too |extra |2 |two |multiple |more )'
+      - 'purchased (too |extra |2 |two |multiple |more )'
+      - 'duplicate|double (order|ordered|bought|purchase)'
+      - 'over.?order|over.?bought|over.?purchased|overbought'
+      - 'extra (pack|box|order|set)'
+      - 'only need(ed)? (1|one|a )'
+      - 'only meant|meant to (order|buy) (1|one)'
+      - 'accidentally ordered (2|two|extra|more)'
+      - 'have (too )?many|had (too )?many|already (have|had) (enough|plenty|some|these)'
+      - 'don.?t need (both|all|this many|this much|2|two)'
+      - 'do not need (both|all|this many|this much|2|two)'
+      - 'returning (extra|one|the other|unused)'
+      - 'kept (one|1|three).*(return|returning)'
+      - 'bought \d.*(need|needed) \d'
+      - 'got \d.*(need|needed) \d'
+      - 'ordered \d.*(need|needed) \d'
+      - 'ordered (too |extra |2 |two )'
+      - 'bought (too |extra |2 |two )'
+      - '\bduplicate\b'
+      - 'double order'
+      - 'over.?order'
+      - 'over.?bought'
+      - 'extra (pack|box|order)'
+      - 'only need(ed)? (1|one)'
+      - 'only meant'
+      - 'accidentally ordered'
+      - 'ordered too many'
+      - 'bought 2'
+      - 'have too many'
+      - 'over purchased'
+    aliases:
+      - "Bought 2"
+      - "too many"
+      - "Too much"
+      - "Duplicate"
+      - "overbought"
+      - "Only need 1"
+      - "Over bought"
+      - "Overordered"
+      - "Double order"
+      - "got too many"
+      - "had too many"
+      - "Over ordered"
+      - "Way too many"
+      - "Way too much"
+      - "Have too many"
+      - "Only need one"
+      - "Only needed 1"
+      - "Bought 2 kinds"
+      - "double ordered"
+      - "Purchased too many."
+      - "we ordered too many"
+      - "Accidentally ordered"
+      - "Bought 2 by accident"
+      - "Bought 2 on accident"
+      - "Bought too many cups"
+      - "Don't need this many"
+      - "Dont need 200 plates"
+      - "Ordered 2 by miatake"
+      - "Overbought for event"
+      - "Bought 2 of the same."
+      - "Bought 2. Only need 2"
+      - "Bought 3 and needed 2"
+      - "bought duplicate item"
+      - "Bought multiple sizes"
+      - "Bought too many boxes"
+      - "I purchased too many."
+      - "Only needed 1 package"
+      - "Ordered 2 by mistakes"
+      - "Returning one package"
+      - "Bought too many"
+      - "Bought more than needed"
+
+  accidental_unauthorized_purchase:
+    label: Accidental / Unauthorized Purchase
+    description: "Mistake checkout, unauthorized purchase, subscribe-and-save error."
+    keywords:
+      - 'accidental|accidentally|by mistake|purchased by mistake|bought by mistake'
+      - 'ordered by mistake|order(ed)? by accident|bought by accident'
+      - 'didn.?t mean|did not mean|didn.?t intend|did not intend'
+      - 'unauthorized|didn.?t approve|did not approve|without permission'
+      - 'forgot.*(cart|cancel|skip|subscribe|update)'
+      - 'subscribe|auto.?ship|subscription'
+      - 'looking\. did not mean|was only looking'
+      - 'son ordered|daughter ordered|husband (accidentally |)?bought|wife select'
+      - 'don.?t remember ordering|do not remember ordering|i didn.?t order'
+      - 'i did not order|never ordered'
+      - 'ordering issue|misordered'
+      - 'clicked.*cart|checkout without realizing'
+      - 'try(ing)? to cancel|tried to cancel|couldn.?t cancel|would not (let me )?cancel'
+      - 'ordering issue'
+      - 'unauthorized'
+      - 'accidental'
+      - 'by mistake'
+      - 'didn.?t mean'
+      - 'did not mean'
+      - 'forgot.*(cart|cancel|skip|subscribe)'
+      - 'subscribe'
+      - 'didn.?t approve'
+      - 'did not approve'
+      - 'without permission'
+      - 'purchased by mistake'
+      - 'bought by mistake'
+      - 'ordered by mistake'
+    aliases:
+      - "By mistake"
+      - "Didn't approve"
+      - "Didn't mean to"
+      - "Got by mistake"
+      - "Couldn't cancel"
+      - "i did not order"
+      - "Sent by mistake"
+      - "Tried to cancel"
+      - "Accidental order"
+      - "bought by mistake"
+      - "My son ordered it"
+      - "Bought by accident"
+      - "Bought by mistake."
+      - "Didn't mean to buy"
+      - "ordered by mistake"
+      - "Subscription error"
+      - "accidental purchase"
+      - "I bought by mistake"
+      - "Ordered by accident"
+      - "purchased by mistake"
+      - "Did not mean to buy 2"
+      - "I bought them by mistake"
+      - "ordered twice by mistake"
+      - "Added to cart by mistake."
+      - "Order delivered by mistake"
+      - "Purchased again by mistake"
+      - "unopened bought by mistake"
+      - "I didn't mean to order this"
+      - "Unopened. Bought by mistake"
+      - "Bought small size by mistake"
+      - "cancelling auto subscription"
+      - "Extra accidentally purchased"
+      - "Not needed bought by mistake"
+      - "We bought those by mistake !"
+      - "Did not mean to buy multiples"
+      - "Did not mean to buy this size"
+      - "do not need this subscription"
+      - "my son accidentally purchased"
+      - "Didn't intend to purchase this"
+      - "I don't remember ordering this"
+      - "Ordering Issue|Unauthorized purchase|I had skipped but it still shipped"
+
+  event_cancelled_or_plans_changed:
+    label: Event Cancelled / Plans Changed
+    description: "Party/wedding/event cancelled or guest count dropped."
+    keywords:
+      - '(event|party|wedding|shower|reunion|funeral|thanksgiving|dinner).*(cancel|cancell|postpon)'
+      - '(cancel|cancell|postpon).*(event|party|wedding|shower)'
+      - 'plans? changed|change of plans|change in event|menu (changed|change)'
+      - 'fewer (people|guests|attendees)|less (people|guests|attendees)|numbers went down|downsized|guest count'
+      - 'not (as )?many (people|guests)|lower attendance|attendance'
+      - 'reason for purchasing was cancelled|this event was cancelled'
+      - 'no longer having a party|not having the oarty|party cancel'
+      - 'illness|hospital|covid|passed away|died|died\b'
+      - 'inclement weather|due to (weather|rain|sickness)'
+      - 'event.*(cancel|cancell)'
+      - 'party.*(cancel|cancell)'
+      - 'wedding.*(cancel|cancell)'
+      - 'plans? changed'
+      - 'change of plans'
+      - 'fewer (people|guests|attendees)'
+      - 'less attendees'
+      - 'numbers went down'
+      - 'downsized'
+      - 'postponed'
+      - 'reason for purchasing was cancelled'
+      - 'this event was cancelled'
+      - 'party cancel'
+    aliases:
+      - "got covid"
+      - "Event cancel"
+      - "Party cancel"
+      - "plan changed"
+      - "Plans changed"
+      - "Canceled event"
+      - "Canceled party"
+      - "Event canceled"
+      - "Party canceled"
+      - "Cancelled event"
+      - "Cancelled party"
+      - "Change in event"
+      - "Change of plans"
+      - "Event canceled."
+      - "event cancelled"
+      - "event downsized"
+      - "fewer attendees"
+      - "Party canceled."
+      - "party cancelled"
+      - "Party plans changed"
+      - "Party was canceled."
+      - "Party was cancelled"
+      - "Baby shower canceled"
+      - "Not having the oarty"
+      - "Party was cancelled."
+      - "the party was cancel"
+      - "Fewer people at event"
+      - "Cancelled our party :("
+      - "Family event cancelled"
+      - "The event was canceled"
+      - "Birthday party canceled"
+      - "My event was cancelled."
+      - "Our party was cancelled"
+      - "The event was cancelled"
+      - "The party was cancelled"
+      - "No longer having a party"
+      - "party has been cancelled"
+      - "The event was cancelled."
+
+  better_price_elsewhere:
+    label: Better Price Elsewhere
+    description: "Found cheaper alternative at store or online."
+    keywords:
+      - 'better (price|deal|option|product|item|choice)'
+      - 'cheaper|less expensive|lower price|half the price'
+      - 'found.*(elsewhere|store|costco|walmart|target|sam|dollar|amazon|local)'
+      - 'too expensive|price (drop|reduced|point)|overpriced'
+      - 'mejor precio|consegu.*precio|online better|best price'
+      - 'purchased.*(elsewhere|locally|store)'
+      - 'bought.*(elsewhere|locally|store|instead)'
+      - 'same (product|item|price).*(less|cheaper|better)'
+      - '\$\d+'
+      - 'better price'
+      - '\bcheaper\b'
+      - 'found.*(price|deal|elsewhere|store|costco|walmart|target|sam.?s|dollar)'
+      - 'too expensive'
+      - 'price (drop|reduced)'
+      - 'online better'
+      - 'best price'
+      - 'mejor precio'
+      - 'less expensive'
+    aliases:
+      - "Better price"
+      - "Found cheaper"
+      - "Found locally"
+      - "too expensive"
+      - "A better price"
+      - "Bought locally"
+      - "Cheaper online"
+      - "Price reduced."
+      - "Bought at store"
+      - "found elsewhere"
+      - "cheaper elsewhere"
+      - "Better price found"
+      - "Find better option"
+      - "found better price"
+      - "found cheaper ones"
+      - "It's too expensive"
+      - "Better price Costco"
+      - "Found better option"
+      - "Found better prices"
+      - "Online better price"
+      - "Best price available"
+      - "Better product found"
+      - "Better price elsewhere"
+      - "Better price at walmart"
+      - "Found a cheaper option."
+      - "Found something cheaper"
+      - "Bought cutlery elsewhere"
+      - "I found cheaper options."
+      - "Purchased similar locally"
+      - "small, found better price"
+      - "Better price now available"
+      - "bought less expensive bowl"
+      - "Found better price locally"
+      - "Better price somewhere else"
+      - "bought clear plates instead"
+      - "Bought larger pack at store"
+      - "Bought multi pack elsewhere"
+      - "Found small place elsewhere"
+      - "Got better price else where"
+      - "Better price at local store."
+
+  wrong_item_received:
+    label: Wrong Item Received
+    description: "Shipped item differs from ordered SKU/product."
+    keywords:
+      - 'instead of'
+      - 'sent (me )?(round|square|plates|bowls|deodorant|wipes|toilet|backpack|bars|tray|organizer)'
+      - 'received (round|square|plates|bowls|deodorant|wipes|8\"|10\"|6\"|9\")'
+      - 'got (round|square|plates|bowls|deodorant)'
+      - 'wrong (plates?|bowls?|item|product|brand|size|shape|colour|color)'
+      - 'not (the )?(palm|bamboo|plates?|bowls?|cutlery|utensils?) (i |that )?(ordered|wanted)'
+      - 'i ordered .* (but|and) (received|got|was sent)'
+      - 'ordered .* received'
+      - 'were sent'
+      - 'was sent'
+      - 'mislabeled|mislabelled'
+      - 'not what (was |i )?(ordered|pictured|shown)'
+      - 'different (item|product|set|plate|bowl)'
+      - 'completely wrong'
+      - 'replacement.*(wrong|same)'
+      - 'received wrong item'
+      - 'wrong item'
+      - 'sent .* instead'
+      - 'received .* instead'
+      - 'not what i ordered'
+      - 'mislabel'
+      - 'wrong brand'
+      - 'knock.?off'
+      - 'completely wrong item'
+    aliases:
+      - "wrong item"
+      - "Wrong Size"
+      - "Wrong color"
+      - "Wrong plate"
+      - "Wrong size."
+      - "Wrong sizes"
+      - "Got wrong size"
+      - "Different plate"
+      - "Item wrong size"
+      - "Went wrong size"
+      - "wrong item sent"
+      - "Wrong size cups"
+      - "wrong size item"
+      - "Wrong size sent"
+      - "Not what ordered"
+      - "Wrong shaped box"
+      - "Wrong size plate"
+      - "Not open bought the wrong size"
+      - "Sent plates insted of Cultery."
+      - "Wrong size plates were ordered"
+      - "8\" plates were sent, I need 10\""
+      - "Bought the wrong size too small"
+      - "Client chose a different plate."
+      - "Ordered the wrong item, mistake"
+      - "Square plates were sent instead"
+      - "The wrong size plates was sent."
+      - "Purchased the wrong size plates."
+      - "received bowls instead of plates"
+      - "Received round instead of square"
+      - "Wrong size & didn't like quality"
+      - "I ordered 12 oz and received 16oz"
+      - "I was sent a silverware organizer"
+      - "Received square plates need round"
+      - "Size is 6 inch instead of 10 inch"
+      - "Was sent to packs of small plates"
+      - "Decided to use a different product"
+      - "I liked a different product better"
+      - "Wanted 6\" instead of 8\""
+      - "Wrong size plates"
+
+  missing_lids_or_parts:
+    label: Missing Lids / Parts
+    description: "Expected lids, covers, or complete pack missing."
+    keywords:
+      - '\blids?\b|\bcovers?\b|\btops?\b'
+      - 'no lid|without lid|missing lid|need(ed)? lids|thought.*lids|come with lids'
+      - 'does not (have|contain|include|come with)|doesn.?t (have|contain|include|come with)'
+      - 'missing (parts?|pieces?|cups?|plates?|bowls?|forks?|spoons?|knives?|straws?)'
+      - 'incomplete|only received|only got|only came with'
+      - 'supposed to (be|have|receive|get) \d+'
+      - 'ordered \d+.*(only|received|got) \d+'
+      - 'pack of \d+.*(pack of|received|got) \d+'
+      - 'count.*(instead|only|received|got)'
+      - 'missing one|half of the order|half gone'
+      - 'no forks|no spoons|no knives|no straws|no tops'
+      - 'there are no lids|doesnt include lids|needed lids'
+      - '\blids?\b'
+      - 'no lid'
+      - 'without lid'
+      - '\bmissing\b'
+      - 'incomplete'
+      - 'didn.?t come with'
+      - 'does not (have|contain|include)'
+      - 'no tops'
+      - 'covers? don.?t'
+      - 'needed lids'
+      - 'thought.*lids'
+    aliases:
+      - "Missing"
+      - "No lids"
+      - "needs lids"
+      - "needed lids"
+      - "Missing lids"
+      - "i needed lids."
+      - "Didnt have lids"
+      - "Lids didn't fit"
+      - "No lids for cups"
+      - "No tops for this"
+      - "did not have lids"
+      - "There are no lids"
+      - "Lid DOESN'T stay on"
+      - "Doesn't include lids"
+      - "Missing some spoons."
+      - "They're are no forks"
+      - "Didn't come with kids"
+      - "Does not contain lids"
+      - "I need cups with lids"
+      - "needed cups with lids"
+      - "the lids don't stay on"
+      - "tops do not fit on cups"
+      - "don't work with the lids"
+      - "Missing player some broke"
+      - "Need something with a lid"
+      - "Thought lids were included"
+      - "Lids don't stay on the cups"
+      - "Thoughts lids were included"
+      - "I only got 50 not 100 plates"
+      - "Supposed to be 9 inch plates"
+      - "Needed the bowls to have lids"
+      - "The lids won't stay on properly"
+      - "Only came with 20 plates, not 100"
+      - "Ordered among product didn't have lid"
+      - "I assumed it comes with lids and straw."
+      - "Lids break every time I put them on cup"
+      - "I guess I thought these had lids as well"
+      - "No forks in my box all spoons and knives"
+      - "Cups did not have any lids to go with them"
+      - "I didn't know these didn't come with lids!"
+
+  allergy_safety_health:
+    label: Allergy / Safety / Health
+    description: "Fragrance, allergy, choking hazard, chemical concern."
+    keywords:
+      - 'allerg|fragrance|scented|hypoallergenic|headache|burning sensation'
+      - 'choking|toxic|poison|pfas|bpa|chemical|not flushable|not food.?safe'
+      - 'hazard|splinter.*(mouth|food)|unsafe|health (risk|concern)'
+      - 'reaction|burns? horribly|gives me a headache'
+      - 'sodium benzoate|citric acid|ingredient'
+      - 'doctor|dr\. recommended|not biocompatible|not organic'
+      - 'made in china.*(mouth|straw|wipe)'
+      - 'allerg'
+      - 'fragrance'
+      - '\bscented\b'
+      - 'hypoallergenic'
+      - 'headache'
+      - 'burning sensation'
+      - 'choking'
+      - '\btoxic\b'
+      - 'pfas|bpa'
+      - '\bchemical\b'
+      - 'not flushable'
+      - 'not food.?safe'
+      - 'hazard'
+    aliases:
+      - "Allergic"
+      - "Bpa and pfas"
+      - "Not flushable"
+      - "Allergic reaction"
+      - "Made in China wipes."
+      - "Item is not flushable"
+      - "Wipes are not flushable"
+      - "I'm allergic to chamomile"
+      - "Dr. recommended against use"
+      - "Found some that are unscented"
+      - "It has aloe n im allergic too it"
+      - "Ingredients not as clean as others"
+      - "I prefer not to buy made in China wipes"
+      - "Contains sodium benzoate and citric acid."
+      - "It is made out of something someone is allergic to."
+      - "It was not biocompatible as event organizer approved"
+      - "Opened one of the four packages. Painful to use extreme burning sensation."
+      - "I was expecting hypoallergenic product & one that didn't leave tissue bits behind"
+      - "When I cleaned my baby's buttocks, he immediately started crying. I tried one on myself and it burns horribly."
+      - "After receiving the item, I looked to see if it was not flushable, which was not on the item when displayed on Amazon. I contacted the company and they said it was not flushable. Should be on item."
+
+  noise_empty:
+    label: Noise / Empty
+    description: "Blank, N/A, single-letter, or non-informative comments."
+    keywords:
+      - '^[\.\*\-\_]+$'
+      - '^amazon$'
+      - '^walmart$'
+      - '^costco$'
+      - '^target$'
+      - '^temu$'
+      - '^sam.?s$'
+      - '^heb$'
+      - '^tjmaxx$'
+      - '^veraterra$'
+      - '^webstaurant'
+      - '^fresh st market$'
+      - '^the chef store'
+      - '^indie palm'
+      - '^eco.?soul'
+      - '^chinet$'
+      - '^please refund$'
+      - '^all i want is a refund'
+      - '^no option$'
+      - '^no problem'
+      - '^no issue'
+      - '^no comments?'
+      - '^n/?n$'
+      - '^noneed$'
+      - '^return$'
+      - '^refund$'
+      - '^in$'
+      - '^extra$'
+      - '^surplus$'
+      - '^overflow$'
+      - '^bulky$'
+      - '^moisture$'
+      - '^durability$'
+      - '^quality$'
+      - '^price$'
+      - '^size$'
+      - '^color$'
+      - '^style$'
+      - '^type$'
+      - '^sizing$'
+      - '^ship fast'
+      - '^perfect condition$'
+      - '^item is fine'
+      - '^product is fine'
+      - '^great$'
+      - '^amazing'
+      - '^blah$'
+      - '^ugh$'
+      - '^xxx+$'
+      - '^aaa+$'
+      - '^mmm+$'
+      - '^hsh$'
+      - '^bocklsg'
+      - '^dghhh'
+      - '^dndkd'
+      - '^fm vj'
+      - '^lead\*'
+      - '^\*\*\*lead'
+      - '^situation:'
+      - '^order related'
+      - '^case :'
+      - '^we.?re sorry an error'
+      - '^$'
+      - '^n/?a$'
+      - '^na$'
+      - '^none$'
+      - '^no$'
+      - '^yes$'
+      - '^ok$'
+      - '^good$'
+      - '^fine$'
+      - '^thanks?$'
+      - '^thank you$'
+      - '^sorry$'
+      - '^nothing$'
+      - '^all good$'
+      - '^no additional comments?$'
+      - '^no comments?$'
+      - '^see above$'
+      - '^h+$'
+      - '^a+$'
+      - '^d+$'
+      - '^j+$'
+      - '^l+$'
+      - '^m+$'
+      - '^n+$'
+      - '^o+$'
+      - '^t+$'
+      - '^u+$'
+      - '^v+$'
+      - '^x+$'
+      - '^y+$'
+      - '^z+$'
+      - '^b+$'
+      - '^c+$'
+      - '^g+$'
+      - '^s+$'
+      - '^f+$'
+      - '^0$'
+      - '^ret$'
+      - '^ty$'
+      - '^thx$'
+      - '^non$'
+      - '^nln$'
+      - '^nnn$'
+      - '^done$'
+      - '^new$'
+      - '^oops$'
+      - '^opss$'
+      - '^mistake$'
+      - '^accidentally$'
+    aliases:
+      - "?"
+      - "."
+      - "a"
+      - "B"
+      - "C"
+      - "D"
+      - "f"
+      - "G"
+      - "H"
+      - "J"
+      - "L"
+      - "M"
+      - "N"
+      - "o"
+      - "S"
+      - "T"
+      - "Ret"
+      - "Thx"
+      - "ugh"
+      - "Xxx"
+      - "Yes"
+      - "zzz"
+      - "Blah"
+      - "Done"
+      - "fine"
+      - "Good"
+      - "Llll"
+      - "none"
+      - "Oops"
+      - "Opss"
+      - "Size"
+      - "Temu"
+      - "type"
+
+  unmapped:
+    label: Unmapped
+    description: "Did not match any known pattern — raise alert and review."
+    aliases:
+      - "Ch"
+      - "Cx"
+      - "Mo"
+      - "Pq"
+      - "wr"
+      - "bad"
+      - "Big"
+      - "Bns"
+      - "dfe"
+      - "DNR"
+      - "dry"
+      - "Hjb"
+      - "N a"
+      - "not"
+      - "Xxf"
+      - "Beca"
+      - "cost"
+      - "defe"
+      - "junk"
+      - "No w"
+      - "Nobe"
+      - "Nope"
+      - "The size is not ok."
+      - "This where to large"
+      - "Vendor is supplying"
+      - "Walmart, 10 dollars"
+      - "Accidential purchase"
+      - "Bought a better otem"
+      - "bought a larger bowl"
+      - "Bought the next size"
+

@@ -167,6 +167,62 @@ export const api = {
   },
   explorePincode: () => request<import('@/types').BrowseResult>('/api/explore/pincode'),
 
+  // Azure export (utility: d_export_file_to_azure)
+  azureContainers: () =>
+    request<{ containers: Array<{ key: string; label: string; container_name: string; env_var: string }> }>(
+      '/api/azure/containers',
+    ),
+  azureFolders: (container: string, prefix = '') => {
+    const params = new URLSearchParams({ container, prefix })
+    return request<{
+      container_key: string
+      container_name: string
+      prefix: string
+      folders: Array<{ name: string; path: string }>
+      files: Array<{ name: string; path: string; size?: number }>
+      truncated: boolean
+    }>(`/api/azure/folders?${params}`)
+  },
+  azureUpload: async (body: {
+    file: File
+    container: string
+    blob_folder?: string
+    blob_name?: string
+  }) => {
+    const form = new FormData()
+    form.append('file', body.file)
+    form.append('container', body.container)
+    form.append('blob_folder', body.blob_folder ?? '')
+    if (body.blob_name?.trim()) form.append('blob_name', body.blob_name.trim())
+
+    const res = await fetch('/api/azure/upload', {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+      body: form,
+    })
+    let payload: ApiResponse<{
+      status: string
+      message: string
+      container_name: string
+      blob_path: string
+      blob_name: string
+      bytes: number
+    }> | null = null
+    try {
+      payload = (await res.json()) as typeof payload
+    } catch {
+      throw new ApiError('INVALID_JSON', 'Server returned a non-JSON response', res.status)
+    }
+    if (!res.ok || !payload?.success) {
+      throw new ApiError(
+        payload?.error?.code ?? 'UPLOAD_FAILED',
+        payload?.error?.message ?? `Upload failed (${res.status})`,
+        res.status,
+      )
+    }
+    return payload.data
+  },
+
   // Configuration Management Center
   configOverview: () => request<Record<string, unknown>>('/api/config/overview'),
   configValidate: () =>

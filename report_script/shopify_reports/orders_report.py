@@ -60,6 +60,7 @@ from config_manager.report_helpers import (
 )
 from report_script.amazon_reports.orders_report import (
     merge_orders_with_existing,
+    prefer_geography_column,
     print_orders_three_month_checklist,
     resolve_orders_duplicates,
 )
@@ -103,7 +104,6 @@ OUTPUT_COLUMNS = [
     "city",
     "state",
     "aov",
-    "country",
     "platform",
     "currency",
     "product_name",
@@ -692,7 +692,6 @@ def transform_geography_shopify_orders(
 
     pivoted["client"] = cfg.client_code
     pivoted["geography"] = code
-    pivoted["country"] = code
     pivoted["platform"] = "shopify"
     pivoted["currency"] = geo_cfg.currency
 
@@ -731,6 +730,7 @@ def save_geography_outputs(
     if df.empty:
         print("[WARN] Nothing to save - DataFrame is empty")
         return []
+    df = prefer_geography_column(df)
     if "geography" not in df.columns:
         raise KeyError("Expected 'geography' column")
 

@@ -13,6 +13,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from backend.api import (
+    azure_export,
     clients,
     config_mgmt,
     explore,
@@ -57,6 +58,7 @@ app.include_router(sequences.router, prefix="/api", tags=["sequences"])
 app.include_router(runs.router, prefix="/api", tags=["runs"])
 app.include_router(system.router, prefix="/api", tags=["system"])
 app.include_router(explore.router, prefix="/api", tags=["explore"])
+app.include_router(azure_export.router, prefix="/api", tags=["azure"])
 app.include_router(config_mgmt.router, prefix="/api", tags=["configuration"])
 
 

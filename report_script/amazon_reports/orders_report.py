@@ -70,7 +70,7 @@ SAVE_OUTPUT = True
 MERGE_WITH_EXISTING = True
 APPLY_TRANSFORM = True
 
-PARQUET_NAME_SUFFIX = "orders_database"
+PARQUET_NAME_SUFFIX = "amazon_orders_database"
 # Status-aware dedupe uses order_id/sku/qty/sales + order_status (see _resolve_duplicate_order_items).
 
 ORDER_COLUMNS = [
@@ -114,7 +114,6 @@ OUTPUT_COLUMNS = [
     "city",
     "state",
     "aov",
-    "country",
     "platform",
     "currency",
 ]
@@ -567,7 +566,6 @@ def transform_geography_orders(
 
     pivoted["client"] = cfg.client_code
     pivoted["geography"] = geography_code
-    pivoted["country"] = geography_code
     pivoted["platform"] = "amazon"
     pivoted["currency"] = cfg.currencies.get(geography_code)
 
@@ -817,6 +815,22 @@ def resolve_orders_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def prefer_geography_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep ``geography`` only — never export both geography and country."""
+    if df is None or df.empty:
+        return df if df is not None else pd.DataFrame()
+    out = df.copy()
+    if "country" in out.columns and "geography" not in out.columns:
+        out = out.rename(columns={"country": "geography"})
+    elif "country" in out.columns and "geography" in out.columns:
+        blank = out["geography"].isna() | (
+            out["geography"].astype(str).str.strip().isin({"", "nan", "None", "NONE"})
+        )
+        out.loc[blank, "geography"] = out.loc[blank, "country"]
+        out = out.drop(columns=["country"])
+    return out
+
+
 def merge_orders_with_existing(
     existing_df: pd.DataFrame,
     new_df: pd.DataFrame,
@@ -832,14 +846,14 @@ def merge_orders_with_existing(
     if not frames:
         return pd.DataFrame()
     if len(frames) == 1:
-        return resolve_orders_duplicates(frames[0])
+        return prefer_geography_column(resolve_orders_duplicates(frames[0]))
 
     combined = pd.concat(frames, ignore_index=True, sort=False)
     print(
         f"\nMerging orders history: existing={len(existing_df):,} + new={len(new_df):,} "
         f"= {len(combined):,} before status-rule dedupe"
     )
-    return resolve_orders_duplicates(combined)
+    return prefer_geography_column(resolve_orders_duplicates(combined))
 
 def process_year_folder(
     year_path: Path,
@@ -947,12 +961,13 @@ def save_geography_outputs(
     if df.empty:
         print("[WARN] Nothing to save — DataFrame is empty")
         return []
+    df = prefer_geography_column(df)
     if "geography" not in df.columns:
         raise KeyError("Expected 'geography' column")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     saved: List[Path] = []
-    print(f"\n>>> STEP: save per-geography orders → {output_dir}")
+    print(f"\n>>> STEP: save per-geography orders -> {output_dir}")
     for geography, geo_df in df.groupby("geography", sort=True):
         geo_name = str(geography).upper()
         parquet_path = output_dir / f"{geo_name}_{name_suffix}.parquet"
