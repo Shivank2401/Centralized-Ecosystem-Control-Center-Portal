@@ -67,6 +67,7 @@ report_stages:
     enabled: true
     clients:
     - ESH
+    - KNC
 reports:
   ageing:
     label: Ageing
@@ -377,12 +378,31 @@ reports:
     module: report_script.utility_codes.d_export_file_to_azure
     menu_order: 4
     enabled: true
+  shipping_queue_report:
+    label: Shipping Queue
+    stage: shipping_queue
+    module: report_script.shipping_queue.shipping_queue_report
+    clients:
+    - ESH
+    - KNC
+    output_subdir: shipping_queue
+    menu_order: 1
+    enabled: true
   esh_shipping_queue:
-    label: ESH Shipping Queue
+    label: ESH Shipping Queue (legacy wrapper)
     stage: shipping_queue
     module: report_script.shipping_queue.esh_shipping_queue
     clients:
     - ESH
     output_subdir: shipping_queue
-    menu_order: 1
-    enabled: true
+    menu_order: 2
+    enabled: false
+  knc_shipping_queue:
+    label: KNC Shipping Queue (legacy wrapper)
+    stage: shipping_queue
+    module: report_script.shipping_queue.knc_shipping_queue
+    clients:
+    - KNC
+    output_subdir: shipping_queue
+    menu_order: 3
+    enabled: false

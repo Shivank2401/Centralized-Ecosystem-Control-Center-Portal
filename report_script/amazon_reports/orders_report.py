@@ -73,6 +73,7 @@ APPLY_TRANSFORM = True
 PARQUET_NAME_SUFFIX = "amazon_orders_database"
 # Status-aware dedupe uses order_id/sku/qty/sales + order_status (see _resolve_duplicate_order_items).
 
+
 ORDER_COLUMNS = [
     "amazon-order-id",
     "order-status",
@@ -421,6 +422,36 @@ def standardize_sales_channel(series: pd.Series) -> pd.Series:
     return series.astype(str).str.strip().str.lower().str.capitalize()
 
 
+def normalize_order_status(series: pd.Series) -> pd.Series:
+    """
+    Collapse Amazon status variants to: pending | shipped | cancelled.
+
+    Examples:
+      "Shipped - Delivered to Buyer" -> shipped
+      "Pending - Waiting for Pick Up" -> pending
+      "Cancelled" / "canceled" -> cancelled
+      "Shipping" -> shipped
+    """
+
+    def _one(value) -> object:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return pd.NA
+        text = str(value).strip()
+        if not text or text.lower() in {"nan", "none", "null"}:
+            return pd.NA
+        # Keep only the part before " - " detail suffix
+        base = re.split(r"\s+-\s+", text, maxsplit=1)[0].strip().lower()
+        if base in {"shipping", "shipped"} or base.startswith("ship"):
+            return "shipped"
+        if base.startswith("pend"):
+            return "pending"
+        if base.startswith("cancel"):
+            return "cancelled"
+        return base
+
+    return series.map(_one)
+
+
 # ---------------------------------------------------------------------------
 # Transform
 # ---------------------------------------------------------------------------
@@ -513,6 +544,18 @@ def transform_geography_orders(
 
     df["quantity"] = df["quantity"].fillna(0).round(0)
     df["total_sales"] = df["item-price"].fillna(0).astype(float)
+
+    # Normalize status to pending / shipped / cancelled (drop " - …" detail)
+    status_col = "order_status" if "order_status" in df.columns else "order-status"
+    if status_col in df.columns:
+        before_statuses = sorted(
+            {str(x).strip() for x in df[status_col].dropna().unique().tolist()}
+        )
+        df[status_col] = normalize_order_status(df[status_col])
+        after_statuses = sorted(
+            {str(x).strip() for x in df[status_col].dropna().unique().tolist()}
+        )
+        print(f"  order_status cleaned: {before_statuses} -> {after_statuses}")
 
     rename = {k: v for k, v in RENAME_MAP.items() if k in df.columns}
     df = df.rename(columns=rename)

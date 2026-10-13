@@ -86,7 +86,7 @@ Centralized Ecosystem Portal/
 │   ├── utility_codes/            # MySQL import / image names / JSON→CSV / Azure upload
 │   ├── atros_code/               # KNC pnl / ads / decomposition
 │   ├── requirement_specific/     # vector_report_amazon / vector_report_shopify / emami_report / SC_inventory
-│   ├── shipping_queue/           # esh_shipping_queue (report.yaml) / knc_shipping_queue; esh_sku_cleaning + Azure upload
+│   ├── shipping_queue/           # shipping_queue_report (ESH+KNC CLIENT_CONFIGS); legacy esh_/knc_ wrappers
 │   ├── awd_fees/ / mbr_report/   # packages (register in report.yaml when ready)
 │   └── item_master/              # (if present) Azure item-master CRUD
 │
@@ -371,7 +371,7 @@ Hide: `enabled: false`. Portal **Developer → Add Report** can also register up
 
 **Retail** (`retail/`): KeHE, Sprouts, Walmart Scintilla — ESH `CLIENT_CONFIGS` + `>>> STEP`; shared `azure_csv_sync` for KeHE/Sprouts CSV append. ETL / Azure semantics unchanged.
 
-**Shipping queue** (`shipping_queue/`): registered stage `shipping_queue` in `report.yaml` + `STAGE_PATHS`. Geos from pipeline/CLI (not `.env` cogs_sheet_*). ESH uses `esh_sku_cleaning` like orders; local `sanity_data/ESH/shipping_queue/{GEO}_*`; Azure `CONTAINER_NAME_ESH` → `sanity_data/shipping_queue/{GEO}_amazon_shipping_queue.csv|.parquet`. KNC script remains separate.
+**Shipping queue** (`shipping_queue/`): shared `shipping_queue_report.py` (ESH+KNC like orders `CLIENT_CONFIGS`). Geos from pipeline/CLI; SKU via `esh_sku_cleaning` / `knc_sku_cleaning`; local `sanity_data/{CLIENT}/shipping_queue/{GEO}_*`; Azure `CONTAINER_NAME_{ESH|KNC}/sanity_data/shipping_queue/`. Legacy `esh_shipping_queue` / `knc_shipping_queue` wrappers kept (disabled in report.yaml).
 
 ---
 
