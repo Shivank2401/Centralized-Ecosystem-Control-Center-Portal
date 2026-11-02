@@ -23,6 +23,7 @@ sequences:
     - manage_fba
     - reserved
     - order
+    - return_database
     - inventory_database
     - shopify_orders
     - shopify_inventory
@@ -77,7 +78,3 @@ sequences:
     - reserved
     - order
     - inventory_database
-    - shopify_orders
-    - shopify_inventory
-    - shopify_ledger
-    - shopify_sell_thru

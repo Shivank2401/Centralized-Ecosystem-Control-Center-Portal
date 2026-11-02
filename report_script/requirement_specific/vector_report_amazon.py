@@ -360,24 +360,34 @@ def build_ledger_days_summary(
         return pd.DataFrame()
 
     out = ledger.copy()
+
     out["date"] = pd.to_datetime(out["date"], utc=True, errors="coerce").dt.tz_localize(None)
+
     out["year_month"] = out["date"].dt.to_period("M").astype(str)
+
     ending = pd.to_numeric(out.get("ending_balance", 0), errors="coerce").fillna(0)
+
     out["Instock"] = np.where(ending > 0, 1, 0)
 
-    group_cols = [c for c in ["client", "geography", "year_month", "sku"] if c in out.columns]
-    summary = (
-        out.groupby(group_cols, dropna=False)
-        .agg(days_in_stock=("Instock", "sum"), total_days=("date", "nunique"))
-        .reset_index()
-    )
-    summary["days_out_of_stock"] = summary["total_days"] - summary["days_in_stock"]
+    # Actual calendar days in each month
+    out["calendar_days"] = out["date"].dt.days_in_month
+
+    group_cols = [c for c in ["client", "geography", "year_month", "sku"]
+        if c in out.columns    ]
+
+    summary = (out.groupby(group_cols, dropna=False).agg(days_in_stock=("Instock", "sum"),total_days=("calendar_days", "max")).reset_index())
+
+    summary["days_out_of_stock"] = (summary["total_days"] - summary["days_in_stock"])
+
     summary["instock_rate"] = (
-        (summary["days_in_stock"] / summary["total_days"].replace(0, np.nan)) * 100
-    ).round(2)
+        summary["days_in_stock"]
+        / summary["total_days"].replace(0, np.nan)
+        * 100    ).round(2)
+
     if not quiet:
         print(
-            f"[{client}] [{geo}] [CHECK] ledger days_summary rows={len(summary):,} "
+            f"[{client}] [{geo}] [CHECK] ledger days_summary "
+            f"rows={len(summary):,} "
             f"months={summary['year_month'].nunique() if not summary.empty else 0}"
         )
     return summary
