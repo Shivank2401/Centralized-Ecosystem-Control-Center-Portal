@@ -1,7 +1,8 @@
 # Atros — KNC PNL / ads / decomposition
 
 Stage: **atros** (separate from `amazon_reports`).  
-Client: **KNC** only. Geos: **UK, DE, AE**.
+Client: **KNC** only. Geos: **UK, DE, AE**.  
+`parse_geos` **skips** unsupported codes (e.g. Shopify-only **IE**) with a warning instead of failing the pipeline.
 
 ## Modules
 | Report | Module | Local masters |

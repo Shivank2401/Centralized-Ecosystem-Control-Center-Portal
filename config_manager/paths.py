@@ -211,3 +211,17 @@ def knc_shopify_cogs_csv(geo: str) -> Path:
     """Local Shopify COGS slice: cogs/knc/{geo}_shopify_cogs.csv"""
     code = str(geo).strip().lower()
     return _PROJECT_ROOT / "cogs" / "knc" / f"{code}_shopify_cogs.csv"
+
+
+def mbr_ads_path(client: str = "ESH") -> Optional[Path]:
+    """
+    Optional all-geo ads CSV for MBR (final_adsales_grosssales style).
+
+    Prefers client-specific env, then MBR_ADS_PATH. Returns None if unset.
+    """
+    code = str(client).strip().upper()
+    for var in (f"{code}_MBR_ADS_PATH", "MBR_ADS_PATH"):
+        path = env_path(var, required=False)
+        if path is not None:
+            return path
+    return None

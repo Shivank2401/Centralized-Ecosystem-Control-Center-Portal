@@ -57,7 +57,7 @@ from report_script.amazon_reports.azure_parquet_upload import (
 
 CLIENT = "ESH"  # CLI default; pipeline passes client= via run()
 PROCESS_GEOS: Optional[List[str]] = None
-LOOKBACK_DAYS = 40
+LOOKBACK_DAYS = 15
 UPLOAD_TO_AZURE = True
 
 OUTPUT_SUBDIR = "shipping_queue"

@@ -29,4 +29,4 @@ Portal decisions: **`docs/portal-architecture.md`**
 - `config_manager/return_directory.yaml` — FBA return reasons + customer-comment groups/alerts
 - `.env` — actual machine paths (from `.env.example`)
 
-See also: `overview.md`, `config.md`, `pipeline-stages.md`, `cogs.md`, `pincode.md`, `invalid-skus.md`, `vector-datahive.md`, `emami-report.md`, `atros-knc.md`, `utility-codes.md`, `azure-upload.md`, `inventory-database.md`, `common-run-logs.md`, `amazon-reports-folder.md`, `shopify-orders.md`, `shopify-inventory.md`, `return-directory.md`, `project-location.md`, `portal.md`
+See also: `overview.md`, `config.md`, `pipeline-stages.md`, `cogs.md`, `pincode.md`, `invalid-skus.md`, `vector-datahive.md`, `emami-report.md`, `atros-knc.md`, `utility-codes.md`, `azure-upload.md`, `inventory-database.md`, `mbr-report.md`, `common-run-logs.md`, `amazon-reports-folder.md`, `shopify-orders.md`, `shopify-inventory.md`, `return-directory.md`, `project-location.md`, `portal.md`

@@ -68,8 +68,10 @@ Centralized Ecosystem Portal/
 │   │   ├── manage_fba_report.py / reserved_report.py / ageing_report.py / ledger_report.py
 │   │   ├── orders_report.py      # 3-month Qty/Sales period table before export
 │   │   ├── inventory_database.py
+│   │   ├── MBR_report.py         # Monthly Business Report (SKU + material); sanity merges + optional ads
 │   │   ├── return_database.py / .ipynb  # FBA returns (ESH); taxonomy → return_directory.yaml; esh_sku_cleaning
 │   │   ├── new_sku_check.py
+│   │   ├── azure_parquet_upload.py
 │   │   └── run_logs.py           # ReportRunLog → sanity_data/{CLIENT}/logs/
 │   ├── shopify_reports/          # Stage: shopify_reports (KNC UK+IE); CLIENT_CONFIGS
 │   │   ├── orders_report.py      # Shopify orders → {GEO}_shopify_orders_database
@@ -273,6 +275,7 @@ Default root: `Centralized Ecosystem Portal/sanity_data/`
 | `shopify_ledger` | `{CLIENT}/ledger/` | `{GEO}_shopify_ledger_inventory.parquet` + `.csv` (alongside Amazon ledger; not merged) |
 | `shopify_sell_thru` | `{CLIENT}/sell_thru/` | `{GEO}_shopify_sell_thru.parquet` + `.csv` (standalone; not merged into orders) |
 | `inventory_database` | `{CLIENT}/inventory_database/` | `{GEO}_inventory_database.parquet` + `.csv` |
+| `mbr_report` | `{CLIENT}/mbr/` | `{GEO}_amazon_mbr_sku.parquet|.csv` + `{GEO}_amazon_mbr_material.parquet|.csv` |
 | `vector_report_amazon` | `{CLIENT}/vector_report_amazon/` | `{geo}_{platform}_inventory_report.*` |
 | `vector_report_shopify` | `{CLIENT}/vector_report/` | `{geo}_shopify_inventory_report.*` (KNC UK/IE) |
 | `emami_report` | `EMM/…` | Excel + CSV masters (see Emami brain note) |
@@ -293,6 +296,7 @@ sanity_data/{CLIENT}/logs/new_skus_vs_cogs/{report}/…      # missing SKU CSVs
 | **orders** | Load summary + geo×year + **Orders period summary table** (GEO × 3 months Qty/Sales) + new SKUs |
 | shopify_orders / shopify_inventory / shopify_ledger / shopify_sell_thru | Load summary + **new SKUs vs Shopify COGS** (`channel=shopify` → `new_skus_vs_cogs/{report}/`) |
 | inventory_database | Combined rows + per-geo new SKUs |
+| mbr | Per-geo SKU + material row counts |
 | vector | Geo checklists + stock status + new SKUs |
 
 **Orders period summary** (printed immediately before parquet/CSV export):

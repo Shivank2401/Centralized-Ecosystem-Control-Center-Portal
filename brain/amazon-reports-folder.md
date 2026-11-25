@@ -8,7 +8,7 @@ All imports and `report.yaml` modules use:
 
 `report_script.amazon_reports.<script>`
 
-Examples: `manage_fba_report`, `reserved_report`, `ageing_report`, `ledger_report`, `orders_report`, `inventory_database`, `new_sku_check`, `run_logs`.
+Examples: `manage_fba_report`, `reserved_report`, `ageing_report`, `ledger_report`, `orders_report`, `inventory_database`, `MBR_report`, `return_database`, `new_sku_check`, `run_logs`.
 
 ## Stage routing
 - Package path: `report_script/amazon_reports` (`pipeline_engine.registry.STAGE_PATHS["common"]`)

@@ -505,6 +505,9 @@ def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
         / 3,
     )
 
+    out["sell_thru"] = np.where(out["sell_thru"] < 0, 10, out["sell_thru"])
+
+
     out["dos"] = np.where(
         out["sell_thru"] > 0,
         np.minimum(out["available"] / out["sell_thru"], MAX_DOS_CAP),

@@ -129,6 +129,16 @@ reports:
     output_subdir: inventory_database
     menu_order: 6
     enabled: true
+  mbr_report:
+    label: MBR Report
+    stage: amazon_reports
+    module: report_script.amazon_reports.MBR_report
+    clients:
+    - ESH
+    - KNC
+    output_subdir: mbr
+    menu_order: 8
+    enabled: true
   return_database:
     label: Return Database
     stage: amazon_reports

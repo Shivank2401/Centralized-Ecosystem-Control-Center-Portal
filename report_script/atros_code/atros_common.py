@@ -172,7 +172,11 @@ def resolve_year_month(
 
 
 def parse_geos(geos: str | Sequence[str] | None) -> list[str]:
-    """Normalize geos list; default = all GEO_CONFIG keys."""
+    """Normalize geos list; default = all GEO_CONFIG keys.
+
+    Unknown geos (e.g. Shopify-only IE) are skipped with a warning so the
+    pipeline can keep running for supported Atros geos (UK / DE / AE).
+    """
     if geos is None:
         values = list(GEO_CONFIG)
     elif isinstance(geos, str):
@@ -180,10 +184,30 @@ def parse_geos(geos: str | Sequence[str] | None) -> list[str]:
     else:
         values = list(geos)
 
-    result = [str(geo).strip().upper() for geo in values if str(geo).strip()]
-    unknown = sorted(set(result) - set(GEO_CONFIG))
+    requested = [str(geo).strip().upper() for geo in values if str(geo).strip()]
+    # Preserve caller order while dropping duplicates
+    seen: set[str] = set()
+    result: list[str] = []
+    unknown: list[str] = []
+    for geo in requested:
+        if geo in seen:
+            continue
+        seen.add(geo)
+        if geo in GEO_CONFIG:
+            result.append(geo)
+        else:
+            unknown.append(geo)
+
     if unknown:
-        raise ValueError(f"Unsupported KNC geographies: {', '.join(unknown)}")
+        print(
+            f"[WARN] [KNC] Skipping unsupported Atros geographies: "
+            f"{', '.join(unknown)} (supported: {', '.join(GEO_CONFIG)})"
+        )
+    if not result and requested:
+        print(
+            "[WARN] [KNC] No supported Atros geographies left after skip - "
+            "nothing to process"
+        )
     return result
 
 

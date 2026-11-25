@@ -85,16 +85,16 @@ class LoadStats:
     def format_summary(self, title: str = "Inventory Load Summary") -> str:
         """Plain-text load summary (also used for sanity run logs)."""
         lines = [
-            "=" * 40,
+            "=" * 15,
             title,
-            "=" * 40,
+            "=" * 15,
             f"Geographies       : {len(self.geographies)}",
             f"Year folders      : {len(self.year_folders)}",
             f"Month folders     : {len(self.month_folders)}",
             f"Files processed   : {self.files_processed}",
             f"Files failed      : {self.files_failed}",
             f"Total rows        : {self.total_rows:,}",
-            "=" * 40,
+            "=" * 15,
         ]
         detail_df = self.summary_table()
         if detail_df.empty:
